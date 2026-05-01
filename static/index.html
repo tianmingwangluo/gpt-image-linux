@@ -211,7 +211,7 @@
         <div id="previewLoading" class="absolute inset-0 flex items-center justify-center bg-zinc-800/80 hidden">
           <div class="text-center">
             <div class="spinner mx-auto mb-3" style="width:32px;height:32px;border-width:3px;"></div>
-            <p class="text-sm text-zinc-400">Generating...</p>
+            <p id="previewLoadingText" class="text-sm text-zinc-400">Generating...</p>
             <div class="w-48 h-1 bg-zinc-700 rounded-full mt-3 overflow-hidden">
               <div class="h-full bg-emerald-500 rounded-full progress-bar"></div>
             </div>
@@ -322,6 +322,7 @@
       const preview = document.getElementById('previewSection');
       const previewLoading = document.getElementById('previewLoading');
       const previewImg = document.getElementById('previewImage');
+      const previewLoadingText = document.getElementById('previewLoadingText');
       const inputs = ['promptInput', 'sizeSelect', 'modelSelect'];
       const spinnerHTML = '<span class="spinner"></span> Generating...';
 
@@ -332,6 +333,7 @@
       if (loading) {
         preview.classList.remove('hidden');
         previewLoading.classList.remove('hidden');
+        previewLoadingText.textContent = 'Queued...';
         previewImg.style.opacity = '0';
       } else {
         previewLoading.classList.add('hidden');
@@ -387,6 +389,48 @@
       return data;
     }
 
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function pollGenerateJob(jobId) {
+      const loadingText = document.getElementById('previewLoadingText');
+      const startedAt = Date.now();
+      const timeoutMs = 10 * 60 * 1000;
+
+      while (Date.now() - startedAt < timeoutMs) {
+        await sleep(2000);
+        const res = await fetch('/api/generate/' + encodeURIComponent(jobId), {
+          headers: { 'Accept': 'application/json' },
+        });
+        const data = await readApiResponse(res);
+
+        if (data.status === 'success') return data;
+        if (data.status === 'error') {
+          throw new Error(data.message || 'Image generation failed');
+        }
+
+        loadingText.textContent = data.status === 'queued' ? 'Queued...' : 'Generating...';
+      }
+
+      throw new Error('Image generation is still running. Check the gallery in a bit, or try again.');
+    }
+
+    async function showGeneratedImage(data) {
+      currentImageUrl = data.image_url;
+      currentFilename = data.image_url.replace('/api/image/', '');
+
+      const previewImg = document.getElementById('previewImage');
+      previewImg.src = data.image_url + '?t=' + Date.now();
+      previewImg.className = 'max-w-full max-h-[500px] object-contain fade-in';
+      document.getElementById('previewPrompt').textContent = data.prompt;
+      document.getElementById('previewSection').classList.remove('hidden');
+      document.getElementById('previewLoading').classList.add('hidden');
+      previewImg.style.opacity = '1';
+
+      await loadGallery();
+    }
+
     async function generateImage() {
       hideError();
       const prompt = document.getElementById('promptInput').value.trim();
@@ -407,20 +451,10 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),
         });
-        const data = await readApiResponse(res);
+        const job = await readApiResponse(res);
+        const data = job.image_url ? job : await pollGenerateJob(job.job_id);
+        await showGeneratedImage(data);
         setLoading(false);
-        currentImageUrl = data.image_url;
-        currentFilename = data.image_url.replace('/api/image/', '');
-
-        const previewImg = document.getElementById('previewImage');
-        previewImg.src = data.image_url + '?t=' + Date.now();
-        previewImg.className = 'max-w-full max-h-[500px] object-contain fade-in';
-        document.getElementById('previewPrompt').textContent = data.prompt;
-        document.getElementById('previewSection').classList.remove('hidden');
-        document.getElementById('previewLoading').classList.add('hidden');
-        previewImg.style.opacity = '1';
-
-        await loadGallery();
       } catch (e) {
         setLoading(false);
         showError(e.message || 'Failed to generate image');

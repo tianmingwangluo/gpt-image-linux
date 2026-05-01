@@ -44,6 +44,23 @@ class GenerateResponse(BaseModel):
     created_at: str
 
 
+class GenerateJobResponse(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "success", "error"]
+    message: Optional[str] = None
+
+
+class GenerateJobStatus(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "success", "error"]
+    message: Optional[str] = None
+    id: Optional[str] = None
+    image_url: Optional[str] = None
+    prompt: Optional[str] = None
+    size: Optional[str] = None
+    created_at: Optional[str] = None
+
+
 class GalleryResponse(BaseModel):
     total: int
     images: list[GalleryEntry]

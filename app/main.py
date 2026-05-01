@@ -2,7 +2,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from contextlib import asynccontextmanager
-import os
+import asyncio
+import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -11,11 +12,10 @@ from .models import (
     SettingsRequest,
     SettingsResponse,
     GenerateRequest,
-    GenerateResponse,
+    GenerateJobResponse,
+    GenerateJobStatus,
     GalleryResponse,
-    ErrorResponse,
     MessageResponse,
-    GalleryEntry,
 )
 from . import storage
 from . import proxy
@@ -27,10 +27,13 @@ async def lifespan(app: FastAPI):
     Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
     app.state.api_url = config.DEFAULT_API_URL
     app.state.api_key = config.DEFAULT_API_KEY
+    app.state.generate_jobs = {}
     yield
 
 
 app = FastAPI(title="GPT Image Panel", lifespan=lifespan)
+
+MAX_GENERATE_JOBS = 100
 
 
 @app.exception_handler(Exception)
@@ -45,6 +48,22 @@ def mask_key(key: str) -> str:
     if not key or len(key) <= 8:
         return "***"
     return key[:4] + "***" + key[-4:]
+
+
+def trim_generate_jobs():
+    jobs = app.state.generate_jobs
+    if len(jobs) <= MAX_GENERATE_JOBS:
+        return
+
+    finished_jobs = [
+        (job_id, job.get("created_at", ""))
+        for job_id, job in jobs.items()
+        if job.get("status") in {"success", "error"}
+    ]
+    finished_jobs.sort(key=lambda item: item[1])
+
+    for job_id, _ in finished_jobs[: len(jobs) - MAX_GENERATE_JOBS]:
+        jobs.pop(job_id, None)
 
 
 @app.get("/")
@@ -72,7 +91,40 @@ async def get_settings():
     )
 
 
-@app.post("/api/generate", response_model=GenerateResponse)
+async def run_generate_job(job_id: str, api_url: str, api_key: str, req: GenerateRequest):
+    jobs = app.state.generate_jobs
+    jobs[job_id] = {
+        "job_id": job_id,
+        "status": "running",
+        "message": "Generating image",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        entry = await proxy.call_images_api(api_url, api_key, req)
+    except Exception as e:
+        jobs[job_id] = {
+            "job_id": job_id,
+            "status": "error",
+            "message": str(e),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        trim_generate_jobs()
+        return
+
+    jobs[job_id] = {
+        "job_id": job_id,
+        "status": "success",
+        "id": entry.id,
+        "image_url": f"/api/image/{entry.filename}",
+        "prompt": entry.prompt,
+        "size": entry.size,
+        "created_at": entry.created_at,
+    }
+    trim_generate_jobs()
+
+
+@app.post("/api/generate", response_model=GenerateJobResponse, status_code=202)
 async def generate(req: GenerateRequest):
     api_url: str = getattr(app.state, "api_url", "")
     api_key: str = getattr(app.state, "api_key", "")
@@ -82,19 +134,28 @@ async def generate(req: GenerateRequest):
     if not api_key:
         raise HTTPException(status_code=400, detail="API Key not configured. Please set it in Settings.")
 
-    try:
-        entry = await proxy.call_images_api(api_url, api_key, req)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    job_id = str(uuid.uuid4())
+    app.state.generate_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "message": "Queued image generation",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    asyncio.create_task(run_generate_job(job_id, api_url, api_key, req))
 
-    return GenerateResponse(
-        id=entry.id,
-        status="success",
-        image_url=f"/api/image/{entry.filename}",
-        prompt=entry.prompt,
-        size=entry.size,
-        created_at=entry.created_at,
+    return GenerateJobResponse(
+        job_id=job_id,
+        status="queued",
+        message="Queued image generation",
     )
+
+
+@app.get("/api/generate/{job_id}", response_model=GenerateJobStatus)
+async def get_generate_job(job_id: str):
+    job = app.state.generate_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Generation job not found")
+    return GenerateJobStatus(**job)
 
 
 @app.get("/api/gallery", response_model=GalleryResponse)

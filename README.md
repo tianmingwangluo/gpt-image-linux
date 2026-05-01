@@ -40,6 +40,8 @@ Then open `http://localhost:9090`.
 4. Enter a **prompt**, choose a **size**, and click **Generate**
 5. View the preview, download the image, or browse the **Gallery**
 
+Generation runs as a background job. The UI starts the job immediately and polls its status, so long image requests do not sit behind a single HTTP response and hit reverse-proxy timeouts.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -58,7 +60,8 @@ Then open `http://localhost:9090`.
 | `GET` | `/health` | Health check |
 | `POST` | `/api/settings` | Save API URL and Key |
 | `GET` | `/api/settings` | Get current settings (key masked) |
-| `POST` | `/api/generate` | Generate an image |
+| `POST` | `/api/generate` | Start an image generation job |
+| `GET` | `/api/generate/{job_id}` | Get generation job status/result |
 | `GET` | `/api/gallery` | List all gallery images |
 | `GET` | `/api/image/{filename}` | Serve image file |
 | `GET` | `/api/download/{filename}` | Download image as attachment |
