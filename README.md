@@ -9,7 +9,6 @@ Web panel for GPT Image 2 API image generation.
 ```bash
 docker build -t gpt-image-panel .
 docker run -d --name gpt-image-panel \
-  --user "$(id -u):$(id -g)" \
   -p 9090:9090 \
   -v $(pwd)/images:/app/images \
   -v $(pwd)/data:/app/data \
@@ -21,13 +20,12 @@ Or with docker-compose:
 ```bash
 cp .env.example .env
 # Edit .env with your API URL and key
-HOST_UID=$(id -u) HOST_GID=$(id -g) docker-compose up -d
+docker-compose up -d --build --force-recreate
 ```
 
 If image generation fails with `Permission denied: 'images/<id>.png'`, the container
-user cannot write to the bind-mounted `./images` directory. Make sure `HOST_UID`
-and `HOST_GID` in `.env` match the owner of the local `images` and `data`
-directories, then recreate the container.
+is still running an old image or an overridden non-root user. Rebuild and recreate
+the container with the command above.
 
 ### Local Development
 

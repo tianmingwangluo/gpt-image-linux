@@ -25,6 +25,7 @@ from . import proxy
 async def lifespan(app: FastAPI):
     Path(config.IMAGES_DIR).mkdir(parents=True, exist_ok=True)
     Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
+    storage.verify_storage_writable()
     app.state.api_url = config.DEFAULT_API_URL
     app.state.api_key = config.DEFAULT_API_KEY
     app.state.generate_jobs = {}

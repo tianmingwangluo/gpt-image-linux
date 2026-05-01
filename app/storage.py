@@ -1,6 +1,5 @@
 import json
 import uuid
-import shutil
 import os
 from pathlib import Path
 from datetime import datetime, timezone
@@ -12,6 +11,28 @@ from . import config
 def _ensure_directories():
     Path(config.IMAGES_DIR).mkdir(parents=True, exist_ok=True)
     Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
+
+
+def _check_directory_writable(path: Path):
+    test_file = path / ".write-test"
+    try:
+        with open(test_file, "wb") as f:
+            f.write(b"ok")
+        test_file.unlink()
+    except OSError as e:
+        uid = os.getuid()
+        gid = os.getgid()
+        absolute_path = path.resolve()
+        raise PermissionError(
+            f"Directory is not writable: {absolute_path} "
+            f"(process uid={uid}, gid={gid}). Original error: {e}"
+        ) from e
+
+
+def verify_storage_writable():
+    _ensure_directories()
+    _check_directory_writable(Path(config.IMAGES_DIR))
+    _check_directory_writable(Path(config.DATA_DIR))
 
 
 def _load_gallery() -> list[dict]:

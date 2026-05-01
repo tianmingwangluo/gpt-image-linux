@@ -15,7 +15,6 @@ COPY --from=builder --chown=appuser:appgroup /install /usr/local
 COPY --chown=appuser:appgroup app/ ./app/
 COPY --chown=appuser:appgroup static/ ./static/
 
-USER 1001
 EXPOSE 9090
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
