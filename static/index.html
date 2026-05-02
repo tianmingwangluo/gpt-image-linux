@@ -99,12 +99,12 @@
         rgba(39, 39, 42, 0.72);
     }
     .preview-loading-active {
-      min-height: clamp(440px, 58vh, 560px);
+      min-height: var(--preview-loading-min-height, 640px);
       max-height: none;
     }
     .preview-loading-surface {
       padding: 2.5rem 1.5rem 3rem;
-      overflow-y: auto;
+      overflow: visible;
     }
     .preview-stage-list {
       display: grid;
@@ -150,7 +150,7 @@
     }
     @media (max-width: 520px) {
       .preview-loading-active {
-        min-height: clamp(520px, 70vh, 680px);
+        min-height: var(--preview-loading-min-height, 760px);
       }
       .preview-stage-list {
         grid-template-columns: 1fr;
@@ -1140,6 +1140,17 @@
       const previewLoadingText = document.getElementById('previewLoadingText');
       previewLoadingText.textContent = formatStageMessage(stage, operation, message);
       renderPreviewStages(operation, stage);
+      updatePreviewLoadingHeight();
+    }
+
+    function updatePreviewLoadingHeight() {
+      const previewImageWrapper = document.getElementById('previewImageWrapper');
+      const previewLoading = document.getElementById('previewLoading');
+      if (!previewImageWrapper || !previewLoading || previewLoading.classList.contains('hidden')) return;
+
+      const verticalBreathingRoom = 48;
+      const nextHeight = Math.ceil(previewLoading.scrollHeight + verticalBreathingRoom);
+      previewImageWrapper.style.setProperty('--preview-loading-min-height', `${nextHeight}px`);
     }
 
     function setLoading(loading, mode = 'generate') {
@@ -1173,8 +1184,10 @@
         previewImg.removeAttribute('src');
         previewImg.classList.add('hidden');
         previewImg.style.opacity = '0';
+        requestAnimationFrame(updatePreviewLoadingHeight);
       } else {
         previewImageWrapper.classList.remove('preview-loading-active');
+        previewImageWrapper.style.removeProperty('--preview-loading-min-height');
         previewLoading.classList.add('hidden');
       }
     }
@@ -1398,6 +1411,7 @@
       previewImg.className = 'max-w-full max-h-[500px] object-contain fade-in';
       previewImg.style.opacity = '1';
       previewImageWrapper.classList.remove('preview-loading-active');
+      previewImageWrapper.style.removeProperty('--preview-loading-min-height');
       previewLoading.classList.add('hidden');
 
       try {
