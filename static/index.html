@@ -99,65 +99,40 @@
         rgba(39, 39, 42, 0.72);
     }
     .preview-loading-active {
-      min-height: var(--preview-loading-min-height, 900px);
+      min-height: 360px !important;
       max-height: none !important;
     }
     .preview-loading-surface {
-      padding: 2.5rem 1.5rem 5rem;
-      overflow: visible;
+      padding: 2rem;
+      overflow: hidden;
     }
     .preview-loading-content {
       width: 100%;
-      max-width: 28rem;
-    }
-    .preview-stage-list {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.35rem 0.75rem;
-    }
-    .preview-stage-item {
+      max-width: 24rem;
       display: flex;
+      flex-direction: column;
       align-items: center;
+      justify-content: center;
       min-width: 0;
-      gap: 0.45rem;
-      color: #71717a;
-      font-size: 0.6875rem;
-      line-height: 1rem;
-      text-align: left;
+      margin: auto;
     }
-    .preview-stage-dot {
-      width: 0.4rem;
-      height: 0.4rem;
-      flex: 0 0 auto;
-      border-radius: 9999px;
-      background: #3f3f46;
-    }
-    .preview-stage-label {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .preview-stage-item.is-done {
+    .preview-current-stage {
+      max-width: 100%;
+      min-height: 1.25rem;
+      margin-top: 0.875rem;
       color: #a1a1aa;
-    }
-    .preview-stage-item.is-done .preview-stage-dot {
-      background: #10b981;
-    }
-    .preview-stage-item.is-active {
-      color: #e4e4e7;
+      font-size: 0.75rem;
+      line-height: 1.25rem;
       font-weight: 600;
-    }
-    .preview-stage-item.is-active .preview-stage-dot {
-      background: #34d399;
-      box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.16);
+      overflow-wrap: anywhere;
+      text-align: center;
     }
     @media (max-width: 520px) {
       .preview-loading-active {
-        min-height: var(--preview-loading-min-height, 1040px);
+        min-height: 320px !important;
       }
-      .preview-stage-list {
-        grid-template-columns: 1fr;
+      .preview-loading-surface {
+        padding: 1.5rem;
       }
     }
     .size-dialog-backdrop {
@@ -433,7 +408,7 @@
             <div class="w-48 h-1 bg-zinc-700/80 rounded-full mt-4 mx-auto overflow-hidden">
               <div class="h-full bg-emerald-500 rounded-full progress-bar"></div>
             </div>
-            <div id="previewStageList" class="preview-stage-list mt-5"></div>
+            <p id="previewCurrentStage" class="preview-current-stage">Queued</p>
           </div>
         </div>
       </div>
@@ -1111,59 +1086,31 @@
       return apiPath === '/v1/responses' ? PREVIEW_STAGES.generationResponses : PREVIEW_STAGES.generationImages;
     }
 
-    function getStageIndex(stages, mode, stage) {
-      const index = stages.findIndex(item => item.key === stage);
-      return index >= 0 ? index : 0;
+    function getStageLabel(mode, stage) {
+      const primaryMatch = getPreviewStages(mode).find(item => item.key === stage);
+      if (primaryMatch) return primaryMatch.label;
+
+      for (const stages of Object.values(PREVIEW_STAGES)) {
+        const fallbackMatch = stages.find(item => item.key === stage);
+        if (fallbackMatch) return fallbackMatch.label;
+      }
+
+      return '';
     }
 
     function formatStageMessage(stage, mode, fallback = '') {
       if (fallback) return fallback;
-      const stages = getPreviewStages(mode);
-      const index = getStageIndex(stages, mode, stage);
-      return stages[index]?.label || (mode === 'edit' ? 'Editing image' : 'Generating image');
-    }
-
-    function renderPreviewStages(mode = 'generate', stage = 'queued') {
-      const operation = mode === 'edit' ? 'edit' : 'generation';
-      const stages = getPreviewStages(operation);
-      const activeIndex = getStageIndex(stages, operation, stage);
-      const stageList = document.getElementById('previewStageList');
-      stageList.innerHTML = stages.map((item, index) => {
-        const stateClass = index < activeIndex ? 'is-done' : index === activeIndex ? 'is-active' : '';
-        return `
-          <div class="preview-stage-item ${stateClass}">
-            <span class="preview-stage-dot"></span>
-            <span class="preview-stage-label" title="${item.label}">${item.label}</span>
-          </div>
-        `;
-      }).join('');
+      return getStageLabel(mode, stage) || (mode === 'edit' ? 'Editing image' : 'Generating image');
     }
 
     function updatePreviewStage(stage = 'queued', mode = 'generate', message = '') {
       const operation = mode === 'edit' ? 'edit' : 'generation';
+      const currentStageLabel = formatStageMessage(stage, operation, message);
       const previewLoadingText = document.getElementById('previewLoadingText');
-      previewLoadingText.textContent = formatStageMessage(stage, operation, message);
-      renderPreviewStages(operation, stage);
-      updatePreviewLoadingHeight();
-    }
-
-    function updatePreviewLoadingHeight() {
-      const previewImageWrapper = document.getElementById('previewImageWrapper');
-      const previewLoading = document.getElementById('previewLoading');
-      if (!previewImageWrapper || !previewLoading || previewLoading.classList.contains('hidden')) return;
-
-      const loadingContent = previewLoading.querySelector('.preview-loading-content');
-      const loadingStyles = window.getComputedStyle(previewLoading);
-      const verticalPadding =
-        parseFloat(loadingStyles.paddingTop) + parseFloat(loadingStyles.paddingBottom);
-      const bottomBreathingRoom = 96;
-      const minimumHeight = window.matchMedia('(max-width: 520px)').matches ? 1040 : 900;
-      const contentHeight = loadingContent?.scrollHeight || previewLoading.scrollHeight;
-      const nextHeight = Math.max(
-        minimumHeight,
-        Math.ceil(contentHeight + verticalPadding + bottomBreathingRoom),
-      );
-      previewImageWrapper.style.setProperty('--preview-loading-min-height', `${nextHeight}px`);
+      const previewCurrentStage = document.getElementById('previewCurrentStage');
+      previewLoadingText.textContent = operation === 'edit' ? 'Editing...' : 'Generating...';
+      previewCurrentStage.textContent = currentStageLabel;
+      previewCurrentStage.title = currentStageLabel;
     }
 
     function setLoading(loading, mode = 'generate') {
@@ -1197,10 +1144,8 @@
         previewImg.removeAttribute('src');
         previewImg.classList.add('hidden');
         previewImg.style.opacity = '0';
-        requestAnimationFrame(updatePreviewLoadingHeight);
       } else {
         previewImageWrapper.classList.remove('preview-loading-active');
-        previewImageWrapper.style.removeProperty('--preview-loading-min-height');
         previewLoading.classList.add('hidden');
       }
     }
@@ -1424,7 +1369,6 @@
       previewImg.className = 'max-w-full max-h-[500px] object-contain fade-in';
       previewImg.style.opacity = '1';
       previewImageWrapper.classList.remove('preview-loading-active');
-      previewImageWrapper.style.removeProperty('--preview-loading-min-height');
       previewLoading.classList.add('hidden');
 
       try {
