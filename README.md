@@ -47,6 +47,7 @@ backend access by client IP before any image generation flow can start.
 3. Click **Save**
 4. Enter a **prompt**, choose generation options, and click **Generate**
 5. View the preview, download the image, or browse the **Gallery**
+6. In the **Gallery**, use the copy button next to delete to copy an image prompt
 
 Generation runs as a background job. The UI starts the job immediately and polls its status, so long image requests do not sit behind a single HTTP response and hit reverse-proxy timeouts.
 

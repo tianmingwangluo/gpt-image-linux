@@ -1026,17 +1026,20 @@
           const date = new Date(img.created_at);
           const timeStr = date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
           const shortPrompt = img.prompt.length > 80 ? img.prompt.substring(0, 80) + '...' : img.prompt;
+          const escapedPrompt = escapeHtml(img.prompt);
+          const escapedPromptAttr = escapeAttribute(img.prompt);
+          const escapedShortPrompt = escapeHtml(shortPrompt);
           return `
             <div class="gallery-card bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden">
               <div class="relative cursor-pointer group" onclick="openLightbox('/api/image/${img.filename}')">
-                <img src="/api/image/${img.filename}" alt="${escapeHtml(img.prompt)}"
+                <img src="/api/image/${img.filename}" alt="${escapedPromptAttr}"
                   class="w-full aspect-square object-cover bg-zinc-800" loading="lazy">
                 <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
-                  <span class="text-xs text-white truncate">${escapeHtml(shortPrompt)}</span>
+                  <span class="text-xs text-white truncate">${escapedShortPrompt}</span>
                 </div>
               </div>
               <div class="p-3">
-                <p class="text-xs text-zinc-500 truncate" title="${escapeHtml(img.prompt)}">${escapeHtml(shortPrompt)}</p>
+                <p class="text-xs text-zinc-500 truncate" title="${escapedPromptAttr}">${escapedShortPrompt}</p>
                 <div class="flex items-center justify-between mt-2">
                   <span class="text-xs text-zinc-600">${timeStr}</span>
                   <div class="flex gap-1">
@@ -1048,9 +1051,18 @@
                       </svg>
                     </a>
                     <button onclick="event.stopPropagation(); deleteImage('${img.id}')"
-                      class="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-900/20 transition-colors">
+                      class="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-900/20 transition-colors"
+                      title="Delete">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                      </svg>
+                    </button>
+                    <button onclick="copyPrompt(event, this)"
+                      data-prompt="${escapedPromptAttr}"
+                      class="p-1.5 rounded-lg text-zinc-500 hover:text-emerald-400 hover:bg-emerald-900/20 transition-colors"
+                      title="Copy prompt">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
                       </svg>
                     </button>
                   </div>
@@ -1078,6 +1090,30 @@
       }
     }
 
+    async function copyPrompt(event, button) {
+      event.stopPropagation();
+      const prompt = button.dataset.prompt || '';
+
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(prompt);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = prompt;
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        }
+        showToast('Copied', 'success');
+      } catch (e) {
+        showToast('Failed to copy prompt', 'error');
+      }
+    }
+
     function openLightbox(src) {
       document.getElementById('lightboxImg').src = src;
       document.getElementById('lightbox').classList.remove('hidden');
@@ -1093,6 +1129,10 @@
       const div = document.createElement('div');
       div.textContent = str;
       return div.innerHTML;
+    }
+
+    function escapeAttribute(str) {
+      return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     document.addEventListener('keydown', (e) => {
