@@ -37,10 +37,50 @@
       to   { opacity: 1; transform: translateY(0); }
     }
     .fade-in { animation: fadeIn 0.4s ease-out both; }
+    .lightbox-shell {
+      width: min(1180px, calc(100vw - 32px));
+      height: min(820px, calc(100vh - 32px));
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+      overflow: hidden;
+      border: 1px solid #27272a;
+      border-radius: 16px;
+      background: #09090b;
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.65);
+    }
+    .lightbox-media {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background:
+        linear-gradient(135deg, rgba(63, 63, 70, 0.16) 25%, transparent 25%) 0 0 / 28px 28px,
+        linear-gradient(135deg, transparent 75%, rgba(63, 63, 70, 0.1) 75%) 0 0 / 28px 28px,
+        #09090b;
+    }
     .lightbox-img {
-      max-width: 90vw; max-height: 90vh;
+      max-width: 100%;
+      max-height: 100%;
       object-fit: contain;
       border-radius: 8px;
+    }
+    .lightbox-details {
+      min-width: 0;
+      border-left: 1px solid #27272a;
+      background: rgba(24, 24, 27, 0.96);
+    }
+    @media (max-width: 900px) {
+      .lightbox-shell {
+        height: min(860px, calc(100vh - 32px));
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 58%) minmax(280px, 42%);
+      }
+      .lightbox-details {
+        border-left: 0;
+        border-top: 1px solid #27272a;
+      }
     }
     textarea::placeholder { color: #52525b; }
     input::placeholder { color: #52525b; }
@@ -365,12 +405,41 @@
   <div id="lightbox" class="fixed inset-0 z-50 hidden">
     <div class="drawer-backdrop absolute inset-0" onclick="closeLightbox()"></div>
     <div class="relative flex items-center justify-center h-full p-4">
-      <img id="lightboxImg" src="" class="lightbox-img">
-      <button onclick="closeLightbox()" class="absolute top-4 right-4 p-2 rounded-lg bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700 transition-colors">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
-      </button>
+      <div class="lightbox-shell fade-in">
+        <div class="lightbox-media">
+          <img id="lightboxImg" src="" alt="" class="lightbox-img">
+        </div>
+        <aside class="lightbox-details flex flex-col min-h-0">
+          <div class="flex items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+            <div class="min-w-0">
+              <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-400">Generation Details</h2>
+              <p id="lightboxCreatedAt" class="mt-1 text-xs text-zinc-600 truncate"></p>
+            </div>
+            <button onclick="closeLightbox()" class="p-2 rounded-lg bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700 transition-colors" aria-label="Close preview">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="flex-1 min-h-0 overflow-y-auto px-5 py-5 space-y-5">
+            <div>
+              <div class="flex items-center justify-between gap-3 mb-2">
+                <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Prompt</h3>
+                <button type="button" onclick="copyLightboxPrompt(event)"
+                  class="px-2.5 py-1.5 rounded-lg bg-zinc-800 text-xs font-medium text-zinc-300 hover:bg-zinc-700 transition-colors">
+                  Copy
+                </button>
+              </div>
+              <p id="lightboxPrompt" class="whitespace-pre-wrap break-words rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-sm leading-6 text-zinc-200"></p>
+            </div>
+
+            <div>
+              <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">Parameters</h3>
+              <dl id="lightboxParams" class="grid grid-cols-1 gap-2"></dl>
+            </div>
+          </div>
+        </aside>
+      </div>
     </div>
   </div>
 
@@ -483,6 +552,8 @@
     let currentFilename = null;
     let lastRequestBody = null;
     let generationStartedAt = null;
+    let galleryById = new Map();
+    let activeLightboxImage = null;
     const SIZE_LIMITS = {
       step: 16,
       maxSide: 3840,
@@ -991,6 +1062,10 @@
     async function showGeneratedImage(data) {
       currentImageUrl = data.image_url;
       currentFilename = data.image_url.replace('/api/image/', '');
+      activeLightboxImage = normalizeGalleryImage({
+        ...data,
+        filename: currentFilename,
+      });
 
       const previewImg = document.getElementById('previewImage');
       const previewLoading = document.getElementById('previewLoading');
@@ -1084,22 +1159,25 @@
         count.textContent = data.total > 0 ? `${data.total} image${data.total !== 1 ? 's' : ''}` : '';
 
         if (!data.images || data.images.length === 0) {
+          galleryById = new Map();
           grid.innerHTML = '';
           empty.classList.remove('hidden');
           return;
         }
 
         empty.classList.add('hidden');
+        galleryById = new Map(data.images.map(img => [img.id, normalizeGalleryImage(img)]));
         grid.innerHTML = data.images.map(img => {
           const date = new Date(img.created_at);
           const timeStr = date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
           const shortPrompt = img.prompt.length > 80 ? img.prompt.substring(0, 80) + '...' : img.prompt;
           const escapedPrompt = escapeHtml(img.prompt);
+          const escapedImageIdAttr = escapeAttribute(img.id);
           const escapedPromptAttr = escapeAttribute(img.prompt);
           const escapedShortPrompt = escapeHtml(shortPrompt);
           return `
             <div class="gallery-card bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden">
-              <div class="relative cursor-pointer group" onclick="openLightbox('/api/image/${img.filename}')">
+              <div class="relative cursor-pointer group" data-image-id="${escapedImageIdAttr}" onclick="openLightbox(this.dataset.imageId)">
                 <img src="/api/image/${img.filename}" alt="${escapedPromptAttr}"
                   class="w-full aspect-square object-cover bg-zinc-800" loading="lazy">
                 <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
@@ -1163,33 +1241,111 @@
       const prompt = button.dataset.prompt || '';
 
       try {
-        if (navigator.clipboard && window.isSecureContext) {
-          await navigator.clipboard.writeText(prompt);
-        } else {
-          const textarea = document.createElement('textarea');
-          textarea.value = prompt;
-          textarea.setAttribute('readonly', '');
-          textarea.style.position = 'fixed';
-          textarea.style.opacity = '0';
-          document.body.appendChild(textarea);
-          textarea.select();
-          document.execCommand('copy');
-          document.body.removeChild(textarea);
-        }
+        await copyText(prompt);
         showToast('Copied', 'success');
       } catch (e) {
         showToast('Failed to copy prompt', 'error');
       }
     }
 
-    function openLightbox(src) {
-      document.getElementById('lightboxImg').src = src;
+    async function copyLightboxPrompt(event) {
+      event.stopPropagation();
+      try {
+        await copyText(activeLightboxImage?.prompt || '');
+        showToast('Copied', 'success');
+      } catch (e) {
+        showToast('Failed to copy prompt', 'error');
+      }
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return Promise.resolve();
+    }
+
+    function normalizeGalleryImage(img) {
+      return {
+        id: img.id || '',
+        filename: img.filename || (img.image_url ? img.image_url.replace('/api/image/', '') : ''),
+        prompt: img.prompt || '',
+        created_at: img.created_at || '',
+        size: img.size || 'Unknown',
+        model: img.model || 'Unknown',
+        quality: img.quality || 'Unknown',
+        output_format: img.output_format || guessFormatFromFilename(img.filename || img.image_url),
+        output_compression: img.output_compression,
+        n: img.n,
+        api_path: img.api_path || 'Unknown',
+      };
+    }
+
+    function guessFormatFromFilename(filename) {
+      const ext = String(filename || '').split('.').pop()?.toLowerCase();
+      if (ext === 'jpg') return 'jpeg';
+      return ['png', 'jpeg', 'webp'].includes(ext) ? ext : 'Unknown';
+    }
+
+    function formatParameterValue(value) {
+      if (value === null || value === undefined || value === '') return 'Not stored';
+      return String(value);
+    }
+
+    function renderParameter(label, value) {
+      return `
+        <div class="rounded-xl border border-zinc-800 bg-zinc-950/45 px-3 py-2.5">
+          <dt class="text-[11px] font-semibold uppercase tracking-wider text-zinc-600">${escapeHtml(label)}</dt>
+          <dd class="mt-1 break-words font-mono text-xs text-zinc-200">${escapeHtml(formatParameterValue(value))}</dd>
+        </div>`;
+    }
+
+    function openLightbox(imageId) {
+      const image = galleryById.get(imageId);
+      if (!image) return;
+
+      activeLightboxImage = image;
+      const lightboxImg = document.getElementById('lightboxImg');
+      lightboxImg.src = '/api/image/' + image.filename;
+      lightboxImg.alt = image.prompt || 'Generated image';
+      document.getElementById('lightboxPrompt').textContent = image.prompt || 'Not stored';
+      document.getElementById('lightboxCreatedAt').textContent = image.created_at
+        ? new Date(image.created_at).toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : '';
+      document.getElementById('lightboxParams').innerHTML = [
+        renderParameter('Model', image.model),
+        renderParameter('Size', image.size),
+        renderParameter('Quality', image.quality),
+        renderParameter('Output Format', image.output_format),
+        renderParameter('Output Compression', image.output_compression),
+        renderParameter('Quantity', image.n),
+        renderParameter('API Path', image.api_path),
+      ].join('');
+
       document.getElementById('lightbox').classList.remove('hidden');
       document.body.style.overflow = 'hidden';
     }
 
     function closeLightbox() {
       document.getElementById('lightbox').classList.add('hidden');
+      document.getElementById('lightboxImg').removeAttribute('src');
+      activeLightboxImage = null;
       document.body.style.overflow = '';
     }
 

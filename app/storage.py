@@ -3,6 +3,7 @@ import uuid
 import os
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Any
 
 from .models import GalleryEntry
 from . import config
@@ -79,7 +80,11 @@ def delete_image(filename: str) -> bool:
 
 
 def add_to_gallery(
-    image_id: str, prompt: str, size: str, filename: str
+    image_id: str,
+    prompt: str,
+    size: str,
+    filename: str,
+    metadata: dict[str, Any] | None = None,
 ) -> GalleryEntry:
     entry = {
         "id": image_id,
@@ -88,6 +93,9 @@ def add_to_gallery(
         "filename": filename,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if metadata:
+        entry.update({key: value for key, value in metadata.items() if value is not None})
+
     entries = _load_gallery()
     entries.insert(0, entry)
     _save_gallery(entries)

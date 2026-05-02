@@ -141,6 +141,14 @@ async def call_image_generation_api(
     timeout = aiohttp.ClientTimeout(total=300)
     format_info = get_output_format_info(payload.output_format)
     entries: list[storage.GalleryEntry] = []
+    gallery_metadata = {
+        "model": payload.model,
+        "quality": payload.quality,
+        "output_format": payload.output_format,
+        "output_compression": payload.output_compression,
+        "n": payload.n,
+        "api_path": api_path,
+    }
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for _ in range(request_count):
@@ -200,6 +208,7 @@ async def call_image_generation_api(
                         prompt=payload.prompt,
                         size=payload.size,
                         filename=filename,
+                        metadata=gallery_metadata,
                     )
                     entries.append(entry)
 
