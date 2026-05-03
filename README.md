@@ -27,7 +27,7 @@ Key characteristics:
 - auto, ratio-based, and custom image sizes
 - preview UI with prompt, parameters, elapsed time, and detailed English generation/edit stages
 - job polling UI with 2-second interval and 10-minute timeout
-- gallery with pagination, lightbox, download, delete, and copy prompt
+- gallery with pagination, lightbox, download, download all as ZIP, delete, copy prompt, and copy image URL
 - optional site access key with session unlock
 - optional IP allowlist and reverse proxy header support
 
@@ -250,6 +250,7 @@ The panel supports these upstream paths:
 | `GET` | `/api/image/{filename}` | Serve image file |
 | `GET` | `/api/download/{filename}` | Download image as attachment |
 | `DELETE` | `/api/gallery/{id}` | Delete gallery entry |
+| `GET` | `/api/download-all` | Download all gallery images as a ZIP file |
 
 ## Runtime behavior notes
 
@@ -322,7 +323,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 - 支持自动、比例和自定义图像尺寸
 - 预览界面：显示提示词、参数、生成耗时，以及英文 generation/edit 细分阶段
 - 任务轮询界面：2 秒轮询一次，最长 10 分钟
-- Gallery：分页、Lightbox、下载、删除、复制提示词
+- Gallery：分页、Lightbox、下载、批量下载为 ZIP、删除、复制提示词、复制图片链接
 - 可选站点访问密钥
 - 可选 IP 白名单和反向代理头支持
 
@@ -545,6 +546,7 @@ curl http://localhost:9090/health
 | `GET` | `/api/image/{filename}` | 访问图片文件 |
 | `GET` | `/api/download/{filename}` | 下载图片 |
 | `DELETE` | `/api/gallery/{id}` | 删除 Gallery 条目 |
+| `GET` | `/api/download-all` | 下载 Gallery 所有图片为 ZIP 文件 |
 
 ## 运行时注意事项
 
