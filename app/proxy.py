@@ -106,8 +106,9 @@ def build_images_request_data(payload: GenerateRequest) -> dict[str, Any]:
         "n": payload.n,
         "quality": payload.quality,
         "output_format": payload.output_format,
-        "response_format": payload.response_format,
     }
+    if payload.response_format is not None:
+        request_data["response_format"] = payload.response_format
     if payload.output_format != "png" and payload.output_compression is not None:
         request_data["output_compression"] = payload.output_compression
     return request_data
@@ -121,8 +122,9 @@ def build_images_edit_form_data(payload: EditRequest) -> dict[str, Any]:
         "n": payload.n,
         "quality": payload.quality,
         "output_format": payload.output_format,
-        "response_format": payload.response_format,
     }
+    if payload.response_format is not None:
+        form_data["response_format"] = payload.response_format
     if payload.output_format != "png" and payload.output_compression is not None:
         form_data["output_compression"] = payload.output_compression
     return form_data
@@ -135,8 +137,9 @@ def build_responses_request_data(payload: GenerateRequest) -> dict[str, Any]:
         "size": payload.size,
         "quality": payload.quality,
         "output_format": payload.output_format,
-        "response_format": payload.response_format,
     }
+    if payload.response_format is not None:
+        image_generation_tool["response_format"] = payload.response_format
     if payload.output_format != "png" and payload.output_compression is not None:
         image_generation_tool["output_compression"] = payload.output_compression
 

@@ -85,7 +85,7 @@ class GenerateRequest(BaseModel):
     quality: Literal["auto", "low", "medium", "high"] = "auto"
     output_format: Literal["png", "jpeg", "webp"] = "png"
     output_compression: Optional[int] = Field(default=None, ge=0, le=100)
-    response_format: Literal["url", "b64_json"] = "b64_json"
+    response_format: Optional[Literal["url", "b64_json"]] = None
 
     @field_validator("size")
     @classmethod

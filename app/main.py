@@ -672,7 +672,7 @@ async def edit_image(
     quality: str = Form("auto"),
     output_format: str = Form("png"),
     output_compression: int | None = Form(None),
-    response_format: str = Form("b64_json"),
+    response_format: str | None = Form(None),
 ):
     api_url: str = getattr(app.state, "api_url", "")
     api_key: str = getattr(app.state, "api_key", "")
