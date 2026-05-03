@@ -295,18 +295,17 @@
           </div>
         </div>
 
-        <div>
-          <label class="block text-sm font-medium text-zinc-300 mb-2">Model</label>
-          <select id="modelSelect" class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
-            <option value="gpt-image-2">gpt-image-2</option>
-          </select>
-        </div>
-
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-zinc-300 mb-2">Model</label>
+            <select id="modelSelect" class="w-full h-[62px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+              <option value="gpt-image-2">gpt-image-2</option>
+            </select>
+          </div>
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2">Image Size</label>
             <button id="sizeSelect" type="button" value="1024x1024" onclick="openSizeDialog()"
-              class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-left text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+              class="w-full h-[62px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-left text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
               <span class="flex items-center justify-between gap-3">
                 <span class="min-w-0">
                   <span id="sizeSelectLabel" class="block font-medium truncate">1024 x 1024</span>
@@ -318,9 +317,12 @@
               </span>
             </button>
           </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2">Quality</label>
-            <select id="qualitySelect" class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+            <select id="qualitySelect" class="w-full h-[52px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
               <option value="auto">Auto</option>
               <option value="low">Low</option>
               <option value="medium">Medium</option>
@@ -329,7 +331,7 @@
           </div>
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2">Format</label>
-            <select id="formatSelect" onchange="handleOutputFormatChange()" class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+            <select id="formatSelect" onchange="handleOutputFormatChange()" class="w-full h-[52px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
               <option value="png">PNG</option>
               <option value="jpeg">JPEG</option>
               <option value="webp">WebP</option>
@@ -338,16 +340,16 @@
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2">Compression</label>
             <input id="compressionInput" type="number" min="0" max="100" step="1" value="" placeholder="Disabled for PNG" disabled
-              class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              class="w-full h-[52px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
           </div>
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2">Quantity</label>
             <input id="quantityInput" type="number" min="1" max="10" step="1" value="1"
-              class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors">
+              class="w-full h-[52px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors">
           </div>
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2">Response Format</label>
-            <select id="responseFormatSelect" class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+            <select id="responseFormatSelect" class="w-full h-[52px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
               <option value="b64_json">b64_json</option>
               <option value="url">url</option>
             </select>
