@@ -22,7 +22,7 @@ Key characteristics:
 ## Features
 
 - settings UI for API base URL, API path, API key, and model
-- generation and edit options for size, quality, format, compression, and quantity
+- generation and edit options for size, quality, format, compression, quantity, and response format
 - image-to-image edits via OpenAI-compatible `/v1/images/edits`
 - auto, ratio-based, and custom image sizes
 - preview UI with prompt, parameters, elapsed time, and detailed English generation/edit stages
@@ -81,7 +81,7 @@ Runtime persistent storage is minimal:
 2. the frontend sends the uploaded image and current parameters to `/api/edits`
 3. the backend creates an in-memory job and calls upstream `/v1/images/edits`
 4. the uploaded image is forwarded as multipart `image`
-5. supported parameters are forwarded as multipart fields: `prompt`, `model`, `n`, `size`, `quality`, `output_format`, and `output_compression` when applicable
+5. supported parameters are forwarded as multipart fields: `prompt`, `model`, `n`, `size`, `quality`, `output_format`, `response_format`, and `output_compression` when applicable
 6. the backend reports detailed stages while building multipart form data, uploading the source image, waiting for the upstream API, parsing JSON, extracting edited image data, decoding `b64_json`, validating bytes, and saving files
 7. returned image data is decoded from base64 or downloaded from URL
 8. the backend saves the edited image and appends the gallery metadata entry
@@ -217,6 +217,7 @@ The panel supports these upstream paths:
 - Format: `PNG`, `JPEG`, or `WebP`
 - Compression: disabled for `PNG`; `0-100` for `JPEG` and `WebP`
 - Quantity: integer from `1` to `10`
+- Response Format: `b64_json` or `url`
 
 ## Environment variables
 
@@ -318,7 +319,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 ## 功能
 
 - 设置界面：API Base URL、API Path、API Key、Model
-- 生成/编辑选项：尺寸、质量、格式、压缩比、数量
+- 生成/编辑选项：尺寸、质量、格式、压缩比、数量、响应格式
 - 通过 OpenAI 兼容 `/v1/images/edits` 支持图生图编辑
 - 支持自动、比例和自定义图像尺寸
 - 预览界面：显示提示词、参数、生成耗时，以及英文 generation/edit 细分阶段
@@ -377,7 +378,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 2. 前端将上传图片和当前参数发送到 `/api/edits`
 3. 后端创建内存任务并调用上游 `/v1/images/edits`
 4. 上传图片以 multipart `image` 字段转发
-5. 支持的参数以 multipart 字段转发：`prompt`、`model`、`n`、`size`、`quality`、`output_format`，以及适用时的 `output_compression`
+5. 支持的参数以 multipart 字段转发：`prompt`、`model`、`n`、`size`、`quality`、`output_format`、`response_format`，以及适用时的 `output_compression`
 6. 后端在构建 multipart 表单、上传源图片、等待上游 API、解析 JSON、提取编辑图片数据、解码 `b64_json`、校验字节和保存文件时持续上报细分阶段
 7. 返回图片数据从 base64 解码或从 URL 下载
 8. 后端保存编辑后的图片并写入 Gallery 元数据
@@ -513,6 +514,7 @@ curl http://localhost:9090/health
 - Format：`PNG`、`JPEG`、`WebP`
 - Compression：`PNG` 不可用；`JPEG` 和 `WebP` 可设置 `0-100`
 - Quantity：`1` 到 `10`
+- Response Format：`b64_json` 或 `url`
 
 ## 环境变量
 

@@ -63,6 +63,7 @@ class GenerateRequest(BaseModel):
     quality: Literal["auto", "low", "medium", "high"] = "auto"
     output_format: Literal["png", "jpeg", "webp"] = "png"
     output_compression: Optional[int] = Field(default=None, ge=0, le=100)
+    response_format: Literal["url", "b64_json"] = "b64_json"
 
     @field_validator("size")
     @classmethod
@@ -92,6 +93,7 @@ class GalleryEntry(BaseModel):
     quality: Optional[str] = None
     output_format: Optional[str] = None
     output_compression: Optional[int] = None
+    response_format: Optional[str] = None
     n: Optional[int] = None
     api_path: Optional[str] = None
 
@@ -107,6 +109,7 @@ class GenerateResponse(BaseModel):
     quality: Optional[str] = None
     output_format: Optional[str] = None
     output_compression: Optional[int] = None
+    response_format: Optional[str] = None
     n: Optional[int] = None
     api_path: Optional[str] = None
 
@@ -134,6 +137,7 @@ class GenerateJobStatus(BaseModel):
     quality: Optional[str] = None
     output_format: Optional[str] = None
     output_compression: Optional[int] = None
+    response_format: Optional[str] = None
     n: Optional[int] = None
     api_path: Optional[str] = None
 

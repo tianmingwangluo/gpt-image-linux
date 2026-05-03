@@ -317,6 +317,7 @@ async def run_generate_job(
         "quality": first_entry.quality,
         "output_format": first_entry.output_format,
         "output_compression": first_entry.output_compression,
+        "response_format": first_entry.response_format,
         "n": first_entry.n,
         "api_path": first_entry.api_path,
     }
@@ -391,6 +392,7 @@ async def run_edit_job(
         "quality": first_entry.quality,
         "output_format": first_entry.output_format,
         "output_compression": first_entry.output_compression,
+        "response_format": first_entry.response_format,
         "n": first_entry.n,
         "api_path": first_entry.api_path,
     }
@@ -438,6 +440,7 @@ async def edit_image(
     quality: str = Form("auto"),
     output_format: str = Form("png"),
     output_compression: int | None = Form(None),
+    response_format: str = Form("b64_json"),
 ):
     api_url: str = getattr(app.state, "api_url", "")
     api_key: str = getattr(app.state, "api_key", "")
@@ -467,6 +470,7 @@ async def edit_image(
             quality=quality,
             output_format=output_format,
             output_compression=output_compression,
+            response_format=response_format,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e

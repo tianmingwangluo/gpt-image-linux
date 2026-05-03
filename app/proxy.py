@@ -23,19 +23,21 @@ def get_output_format_info(output_format: str) -> dict[str, str]:
     return OUTPUT_FORMATS.get(output_format, OUTPUT_FORMATS["png"])
 
 
-def extract_base64_image(value: Any) -> str | None:
+def extract_response_image_result(value: Any) -> dict[str, str] | None:
     if isinstance(value, str) and value:
-        return value
+        if value.startswith(("http://", "https://")):
+            return {"url": value}
+        return {"b64_json": value}
 
     if isinstance(value, dict):
-        for key in ("b64_json", "base64", "data", "result"):
-            image = extract_base64_image(value.get(key))
+        for key in ("url", "b64_json", "base64", "data", "result"):
+            image = extract_response_image_result(value.get(key))
             if image:
                 return image
 
     if isinstance(value, list):
         for item in value:
-            image = extract_base64_image(item)
+            image = extract_response_image_result(item)
             if image:
                 return image
 
@@ -49,9 +51,9 @@ def extract_response_image_results(result: dict[str, Any]) -> list[dict[str, str
         if not isinstance(item, dict) or item.get("type") != "image_generation_call":
             continue
 
-        image = extract_base64_image(item.get("result"))
+        image = extract_response_image_result(item.get("result"))
         if image:
-            image_results.append({"b64_json": image})
+            image_results.append(image)
 
     return image_results
 
@@ -96,6 +98,7 @@ def build_images_request_data(payload: GenerateRequest) -> dict[str, Any]:
         "n": payload.n,
         "quality": payload.quality,
         "output_format": payload.output_format,
+        "response_format": payload.response_format,
     }
     if payload.output_format != "png" and payload.output_compression is not None:
         request_data["output_compression"] = payload.output_compression
@@ -110,6 +113,7 @@ def build_images_edit_form_data(payload: EditRequest) -> dict[str, Any]:
         "n": payload.n,
         "quality": payload.quality,
         "output_format": payload.output_format,
+        "response_format": payload.response_format,
     }
     if payload.output_format != "png" and payload.output_compression is not None:
         form_data["output_compression"] = payload.output_compression
@@ -123,6 +127,7 @@ def build_responses_request_data(payload: GenerateRequest) -> dict[str, Any]:
         "size": payload.size,
         "quality": payload.quality,
         "output_format": payload.output_format,
+        "response_format": payload.response_format,
     }
     if payload.output_format != "png" and payload.output_compression is not None:
         image_generation_tool["output_compression"] = payload.output_compression
@@ -215,6 +220,7 @@ async def call_image_generation_api(
         "quality": payload.quality,
         "output_format": payload.output_format,
         "output_compression": payload.output_compression,
+        "response_format": payload.response_format,
         "n": payload.n,
         "api_path": api_path,
     }
@@ -377,6 +383,7 @@ async def call_image_edit_api(
         "quality": payload.quality,
         "output_format": payload.output_format,
         "output_compression": payload.output_compression,
+        "response_format": payload.response_format,
         "n": payload.n,
         "api_path": api_path,
     }
