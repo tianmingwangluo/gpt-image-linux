@@ -490,8 +490,8 @@ async def run_generate_job(
                 message,
                 "generation",
             ),
-            duration,
         )
+        duration = f"{time.monotonic() - started_at:.2f}s"
     except Exception as e:
         error_message = get_exception_message(e)
         logger.exception(
@@ -589,8 +589,8 @@ async def run_edit_job(
                 message,
                 "edit",
             ),
-            duration,
         )
+        duration = f"{time.monotonic() - started_at:.2f}s"
     except Exception as e:
         error_message = get_exception_message(e)
         logger.exception(
@@ -617,7 +617,6 @@ async def run_edit_job(
         trim_generate_jobs()
         return
 
-    duration = f"{time.monotonic() - started_at:.2f}s"
     set_generate_job_progress(
         job_id,
         "finalizing_preview",
