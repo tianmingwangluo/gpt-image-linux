@@ -347,7 +347,14 @@ def add_to_gallery_sync(
     return GalleryEntry(**entry)
 
 
-def delete_from_gallery(image_id: str) -> bool:
+def update_gallery_entry(image_id: str, updates: dict[str, Any]) -> GalleryEntry | None:
+    entries = _load_gallery()
+    for entry in entries:
+        if entry["id"] == image_id:
+            entry.update({k: v for k, v in updates.items() if v is not None})
+            _save_gallery(entries)
+            return GalleryEntry(**entry)
+    return None
     entries = _load_gallery()
     original_len = len(entries)
     entries = [e for e in entries if e["id"] != image_id]

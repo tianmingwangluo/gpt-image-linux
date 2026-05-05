@@ -465,6 +465,8 @@ async def run_generate_job(
     api_preset_name: str,
     req: GenerateRequest,
 ):
+    import time
+    started_at = time.monotonic()
     jobs = app.state.generate_jobs
     jobs[job_id] = {
         "job_id": job_id,
@@ -488,6 +490,7 @@ async def run_generate_job(
                 message,
                 "generation",
             ),
+            duration,
         )
     except Exception as e:
         error_message = get_exception_message(e)
@@ -515,6 +518,7 @@ async def run_generate_job(
         trim_generate_jobs()
         return
 
+    duration = f"{time.monotonic() - started_at:.2f}s"
     set_generate_job_progress(
         job_id,
         "finalizing_preview",
@@ -543,6 +547,7 @@ async def run_generate_job(
         "n": first_entry.n,
         "api_path": first_entry.api_path,
         "api_preset_name": first_entry.api_preset_name,
+        "duration": duration,
     }
     trim_generate_jobs()
 
@@ -557,6 +562,8 @@ async def run_edit_job(
     image_filename: str,
     image_content_type: str,
 ):
+    import time
+    started_at = time.monotonic()
     jobs = app.state.generate_jobs
     jobs[job_id] = {
         "job_id": job_id,
@@ -582,6 +589,7 @@ async def run_edit_job(
                 message,
                 "edit",
             ),
+            duration,
         )
     except Exception as e:
         error_message = get_exception_message(e)
@@ -609,6 +617,7 @@ async def run_edit_job(
         trim_generate_jobs()
         return
 
+    duration = f"{time.monotonic() - started_at:.2f}s"
     set_generate_job_progress(
         job_id,
         "finalizing_preview",
@@ -637,6 +646,7 @@ async def run_edit_job(
         "n": first_entry.n,
         "api_path": first_entry.api_path,
         "api_preset_name": first_entry.api_preset_name,
+        "duration": duration,
     }
     trim_generate_jobs()
 
