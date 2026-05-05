@@ -355,6 +355,9 @@ def update_gallery_entry(image_id: str, updates: dict[str, Any]) -> GalleryEntry
             _save_gallery(entries)
             return GalleryEntry(**entry)
     return None
+
+
+def delete_from_gallery(image_id: str) -> bool:
     entries = _load_gallery()
     original_len = len(entries)
     entries = [e for e in entries if e["id"] != image_id]
