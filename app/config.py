@@ -17,5 +17,6 @@ TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "").lower() in {
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 IMAGES_DIR = os.getenv("IMAGES_DIR", "./images")
 DATA_DIR = os.getenv("DATA_DIR", "./data")
+DATABASE_FILE = os.getenv("DATABASE_FILE", os.path.join(DATA_DIR, "app.sqlite3"))
 GALLERY_FILE = os.path.join(DATA_DIR, "gallery.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")

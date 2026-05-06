@@ -322,21 +322,16 @@ async def call_image_generation_api(
                         if progress:
                             progress(
                                 "saving_image_file",
-                                f"Saving image file ({image_index + 1}/{len(data)})",
+                                "Saving image file and gallery metadata "
+                                f"({image_index + 1}/{len(data)})",
                             )
-                        await storage.save_image_async(image_bytes, filename)
-                        if progress:
-                            progress(
-                                "updating_gallery",
-                                f"Updating gallery metadata ({image_index + 1}/{len(data)})",
-                            )
-                        entry = storage.add_to_gallery_sync(
+                        entry = await storage.add_to_gallery_async(
+                            image_bytes=image_bytes,
                             image_id=image_id,
                             prompt=payload.prompt,
                             size=payload.size,
                             filename=filename,
                             metadata=gallery_metadata,
-                            image_bytes=image_bytes,
                         )
                         entries.append(entry)
 

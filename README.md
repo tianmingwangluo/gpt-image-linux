@@ -12,11 +12,11 @@ Key characteristics:
 
 - single-page frontend served from `static/index.html`
 - FastAPI backend defined primarily in `app/main.py`
-- API presets persisted to `data/settings.json`
+- API presets persisted to SQLite at `data/app.sqlite3`
 - background image-generation jobs executed with `asyncio.create_task`
 - local image storage under `images/`
-- gallery metadata stored in `data/gallery.json`
-- API preset settings stored in `data/settings.json`
+- gallery metadata stored in SQLite at `data/app.sqlite3`
+- legacy `data/gallery.json` and `data/settings.json` are imported once on startup when the database is empty
 - Docker and Docker Compose deployment support
 - no test suite is currently present in the repository
 
@@ -63,7 +63,7 @@ There is no frontend build step.
 Runtime persistent storage is minimal:
 
 - generated images are saved in the `images/` directory
-- gallery metadata is stored in `data/gallery.json`, including generation duration
+- gallery metadata and API presets are stored in SQLite at `data/app.sqlite3`, including generation duration
 - generation jobs live only in process memory and are lost on restart
 
 ### Generation flow
@@ -93,8 +93,8 @@ Runtime persistent storage is minimal:
 - Python 3.11+
 - FastAPI
 - Uvicorn
-- httpx
-- aiofiles
+- aiohttp
+- SQLite
 - Pydantic v2
 - Pillow
 - Tailwind CSS and Font Awesome via CDN
@@ -247,7 +247,8 @@ The panel supports these upstream paths:
 | `TRUST_PROXY_HEADERS` | `false` | Read `X-Forwarded-For` or `X-Real-IP` from a trusted reverse proxy |
 | `MAX_FILE_SIZE_MB` | `50` | Max image size in MB |
 | `IMAGES_DIR` | `./images` | Directory for saved images |
-| `DATA_DIR` | `./data` | Directory for gallery metadata |
+| `DATA_DIR` | `./data` | Directory for SQLite runtime data |
+| `DATABASE_FILE` | `./data/app.sqlite3` | SQLite database for gallery metadata and API presets |
 | `PYTHON_BASE_IMAGE` | `python:3.11-slim` | Docker build base image; override when Docker Hub is slow or blocked |
 
 ## Endpoints
@@ -275,9 +276,10 @@ The panel supports these upstream paths:
 
 ## Runtime behavior notes
 
-- API presets are persisted to `data/settings.json`.
-- If `data/settings.json` does not exist, the default preset is initialized from `DEFAULT_API_URL`, `DEFAULT_API_KEY`, and `DEFAULT_API_PATH`.
-- API keys are masked in the UI but stored as plain text in `data/settings.json`.
+- API presets are persisted to the SQLite database configured by `DATABASE_FILE`.
+- If the database has no presets, the default preset is initialized from `DEFAULT_API_URL`, `DEFAULT_API_KEY`, and `DEFAULT_API_PATH`.
+- API keys are masked in the UI but stored as plain text in SQLite.
+- Existing `data/settings.json` and `data/gallery.json` files are imported once when the matching database tables are empty.
 - On startup, the backend scans `IMAGES_DIR` and removes gallery metadata entries whose image files are missing.
 - Finished generation jobs are trimmed when the job store exceeds `MAX_GENERATE_JOBS`.
 - `DELETE /api/gallery/{image_id}` removes metadata and deletes the image file from `IMAGES_DIR` when no remaining gallery entry references that filename.
@@ -296,7 +298,7 @@ Helpful guidelines:
 
 - keep backend changes simple and explicit
 - use FastAPI response models from `app/models.py` where applicable
-- keep persistent file operations centralized in `app/storage.py`
+- keep persistent storage operations centralized in `app/storage.py`
 - keep upstream API interaction centralized in `app/proxy.py`
 - avoid introducing a frontend build system unless explicitly requested
 - avoid storing real API keys in repository files
@@ -332,11 +334,11 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 
 - 单页前端，由 `static/index.html` 提供
 - FastAPI 后端主要定义在 `app/main.py`
-- API 预设持久化保存在 `data/settings.json`
+- API 预设持久化保存在 SQLite：`data/app.sqlite3`
 - 图像生成任务通过 `asyncio.create_task` 异步执行
 - 图片保存在 `images/`
-- Gallery 元数据保存在 `data/gallery.json`
-- API 预设配置保存在 `data/settings.json`
+- Gallery 元数据保存在 SQLite：`data/app.sqlite3`
+- 旧的 `data/gallery.json` 和 `data/settings.json` 会在数据库为空时于启动阶段导入一次
 - 支持 Docker 和 Docker Compose 部署
 - 仓库目前没有测试套件
 
@@ -383,7 +385,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 运行时持久化存储非常简单：
 
 - 生成的图片保存在 `images/` 目录
-- Gallery 元数据保存在 `data/gallery.json`，包含真实图片宽高和生成耗时
+- Gallery 元数据和 API 预设保存在 SQLite：`data/app.sqlite3`，包含真实图片宽高和生成耗时
 - 生成任务仅保存在进程内存中，重启后会丢失
 
 ### 生成流程
@@ -413,8 +415,8 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 - Python 3.11+
 - FastAPI
 - Uvicorn
-- httpx
-- aiofiles
+- aiohttp
+- SQLite
 - Pydantic v2
 - Pillow
 - Tailwind CSS 与 Font Awesome（CDN）
@@ -567,7 +569,8 @@ curl http://localhost:9090/health
 | `TRUST_PROXY_HEADERS` | `false` | 是否读取受信任反向代理的 `X-Forwarded-For` 或 `X-Real-IP` |
 | `MAX_FILE_SIZE_MB` | `50` | 图片最大体积（MB） |
 | `IMAGES_DIR` | `./images` | 图片存储目录 |
-| `DATA_DIR` | `./data` | Gallery 元数据目录 |
+| `DATA_DIR` | `./data` | SQLite 运行时数据目录 |
+| `DATABASE_FILE` | `./data/app.sqlite3` | 保存 Gallery 元数据和 API 预设的 SQLite 数据库 |
 | `PYTHON_BASE_IMAGE` | `python:3.11-slim` | Docker 构建基础镜像；Docker Hub 慢或不可访问时可覆盖 |
 
 ## 接口列表
@@ -595,9 +598,10 @@ curl http://localhost:9090/health
 
 ## 运行时注意事项
 
-- API 预设持久化保存在 `data/settings.json`。
-- 如果 `data/settings.json` 不存在，默认预设会使用 `DEFAULT_API_URL`、`DEFAULT_API_KEY` 和 `DEFAULT_API_PATH` 初始化。
-- API Key 在界面中掩码展示，但会以明文保存到 `data/settings.json`。
+- API 预设持久化保存在 `DATABASE_FILE` 指向的 SQLite 数据库。
+- 如果数据库中没有 preset，默认预设会使用 `DEFAULT_API_URL`、`DEFAULT_API_KEY` 和 `DEFAULT_API_PATH` 初始化。
+- API Key 在界面中掩码展示，但会以明文保存到 SQLite。
+- 旧的 `data/settings.json` 和 `data/gallery.json` 会在对应数据库表为空时导入一次。
 - 启动时后端会扫描 `IMAGES_DIR`，并移除图片文件已不存在的 Gallery 元数据条目。
 - 当任务数量超过 `MAX_GENERATE_JOBS` 时，已结束任务会被裁剪。
 - `DELETE /api/gallery/{image_id}` 会删除元数据；如果没有其他 Gallery 条目引用同一文件名，也会删除 `IMAGES_DIR` 中的对应图片文件。
@@ -616,7 +620,7 @@ curl http://localhost:9090/health
 
 - 后端修改尽量保持简单和明确
 - 尽量使用 `app/models.py` 中的 FastAPI 响应模型
-- 持久化文件操作集中在 `app/storage.py`
+- 持久化存储操作集中在 `app/storage.py`
 - 上游 API 调用集中在 `app/proxy.py`
 - 除非明确要求，否则不要引入前端构建系统
 - 不要在仓库文件中保存真实 API Key
