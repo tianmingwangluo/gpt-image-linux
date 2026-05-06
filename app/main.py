@@ -793,16 +793,14 @@ async def get_generate_job(job_id: str):
 
 
 @app.get("/api/gallery", response_model=GalleryResponse)
-async def get_gallery(
+async def get_gallery_handler(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=9, ge=1, le=100),
 ):
-    entries = storage.get_gallery()
-    total = len(entries)
+    total = storage.get_gallery_count()
     total_pages = max((total + page_size - 1) // page_size, 1)
     page = min(page, total_pages)
-    start = (page - 1) * page_size
-    end = start + page_size
+    offset = (page - 1) * page_size
 
     return GalleryResponse(
         total=total,
@@ -811,7 +809,7 @@ async def get_gallery(
         total_pages=total_pages,
         has_prev=page > 1,
         has_next=page < total_pages,
-        images=entries[start:end],
+        images=storage.get_gallery(limit=page_size, offset=offset),
     )
 
 
@@ -820,10 +818,9 @@ async def serve_image(filename: str):
     path = storage.get_image_path(filename)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
-    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    return StreamingResponse(
-        open(path, "rb"),
-        media_type=media_type,
+    return FileResponse(
+        path,
+        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
         headers={"Cache-Control": "public, max-age=31536000"},
     )
 
@@ -833,15 +830,11 @@ async def download_image(filename: str):
     path = storage.get_image_path(filename)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     extension = path.suffix.lstrip(".") or "png"
-    return StreamingResponse(
-        open(path, "rb"),
-        media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="gpt-image-{timestamp}.{extension}"',
-        },
+    return FileResponse(
+        path,
+        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+        filename=f"gpt-image-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.{extension}",
     )
 
 
@@ -884,8 +877,7 @@ async def download_all_images():
 
 @app.delete("/api/gallery", response_model=MessageResponse)
 async def delete_all_gallery_images():
-    total = len(storage.get_gallery())
-    deleted_count = storage.delete_all_gallery_images()
+    total, deleted_count = storage.delete_all_gallery_images()
     return MessageResponse(
         status="ok",
         message=f"Deleted {deleted_count} image file(s) and {total} gallery entries",

@@ -669,17 +669,43 @@ async def batch_save_and_update_gallery(
     return [GalleryEntry(**entry) for entry in entries_created]
 
 
-def get_gallery() -> list[GalleryEntry]:
+def get_gallery_count() -> int:
     _ensure_database()
     with _connect() as conn:
-        rows = conn.execute(
-            f"""
+        row = conn.execute("SELECT COUNT(*) FROM gallery_entries").fetchone()
+        return int(row[0]) if row else 0
+
+
+def get_gallery(
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[GalleryEntry]:
+    _ensure_database()
+    with _connect() as conn:
+        sql = f"""
             SELECT {", ".join(GALLERY_COLUMNS)}
             FROM gallery_entries
             ORDER BY created_at DESC, rowid DESC
-            """
-        ).fetchall()
+        """
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+            if offset is not None:
+                sql += " OFFSET ?"
+                params = (limit, offset)
+        rows = conn.execute(sql, params).fetchall()
     return [GalleryEntry(**_gallery_entry_from_row(row)) for row in rows]
+
+
+def get_all_filenames() -> list[str]:
+    """Return all filenames in the gallery without loading full entry objects."""
+    _ensure_database()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT filename FROM gallery_entries WHERE filename IS NOT NULL"
+        ).fetchall()
+        return [row["filename"] for row in rows if row["filename"]]
 
 
 def add_to_gallery_sync(
@@ -812,26 +838,39 @@ def delete_gallery_image(image_id: str) -> tuple[bool, int]:
                 return True, deleted_count
 
 
-def delete_all_gallery_images() -> int:
+def delete_all_gallery_images() -> tuple[int, int]:
+    """Delete all gallery entries and their image files.
+
+    Returns (total_deleted, file_count) where total_deleted is the number of
+    gallery entries removed and file_count is the number of image files deleted.
+    Uses a single transaction so the two operations are atomic.
+    """
     _ensure_database()
     with _storage_lock:
         with _connect() as conn:
             with _transaction(conn):
-                rows = conn.execute(
-                    "SELECT DISTINCT filename FROM gallery_entries WHERE filename IS NOT NULL"
-                ).fetchall()
-                filenames_to_delete = {
-                    row["filename"] for row in rows if row["filename"]
-                }
+                # Count entries first so we can report it after deletion
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM gallery_entries"
+                ).fetchone()
+                total = int(row[0]) if row else 0
 
+                # Collect filenames referenced by gallery entries
+                referenced_filenames = get_all_filenames()
+
+                # Collect all valid image files in the images directory
                 images_dir = Path(config.IMAGES_DIR)
+                disk_filenames: set[str] = set()
                 if images_dir.exists():
-                    filenames_to_delete.update(
+                    disk_filenames = {
                         path.name
                         for path in images_dir.iterdir()
                         if path.is_file()
                         and path.suffix.lower() in IMAGE_FILE_EXTENSIONS
-                    )
+                    }
+
+                # Files to delete: referenced by gallery OR on disk (union)
+                filenames_to_delete = set(referenced_filenames) | disk_filenames
 
                 deleted_count = 0
                 for filename in filenames_to_delete:
@@ -839,4 +878,4 @@ def delete_all_gallery_images() -> int:
                         deleted_count += 1
 
                 conn.execute("DELETE FROM gallery_entries")
-                return deleted_count
+                return total, deleted_count
