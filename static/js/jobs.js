@@ -1,6 +1,6 @@
 import { apiFetch, isNetworkFetchError } from './api.js';
 import { loadGallery, normalizeGalleryImage, setActiveLightboxImage } from './gallery.js';
-import { isResponsesApiSelected, refreshParameterControls } from './settings.js';
+import { isResponsesApiSelected } from './settings.js';
 import {
   clampCompressionInput,
   clampQuantityInput,
@@ -68,6 +68,7 @@ let lastAction = 'generate';
 let selectedEditImage = null;
 let generationStartedAt = null;
 let activeGenerateJobId = null;
+let latestJobId = null;
 const cancelledGenerateJobIds = new Set();
 
 export function markGenerateJobCancelled(jobId) {
@@ -127,25 +128,20 @@ export async function generateImage() {
   lastAction = 'generate';
 
   generationStartedAt = performance.now();
-  setLoading(true, 'generate');
-  document.getElementById('previewPrompt').textContent = prompt;
-  updatePreviewTime('Elapsed');
+  showPreviewLoading('generate', prompt);
+
   try {
     const job = await apiFetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
     }, 'starting image generation');
-    activeGenerateJobId = job.job_id || null;
-    const data = job.image_url ? job : await pollGenerateJob(job.job_id, 'generate');
-    await showGeneratedImage(data);
-    setLoading(false);
+    const jobId = job.job_id || null;
+    activeGenerateJobId = jobId;
+    latestJobId = jobId;
+    pollAndShow(jobId, 'generate', prompt);
   } catch (e) {
-    setLoading(false);
-    updatePreviewTime('Elapsed');
     handleJobError(e, 'Failed to generate image');
-  } finally {
-    activeGenerateJobId = null;
   }
 }
 
@@ -174,25 +170,19 @@ export async function editImage() {
   lastRequestBody = requestBody;
   lastAction = 'edit';
   generationStartedAt = performance.now();
-  setLoading(true, 'edit');
-  document.getElementById('previewPrompt').textContent = prompt;
-  updatePreviewTime('Elapsed');
+  showPreviewLoading('edit', prompt);
 
   try {
     const job = await apiFetch('/api/edits', {
       method: 'POST',
       body: formData,
     }, 'starting image edit');
-    activeGenerateJobId = job.job_id || null;
-    const data = job.image_url ? job : await pollGenerateJob(job.job_id, 'edit');
-    await showGeneratedImage(data);
-    setLoading(false);
+    const jobId = job.job_id || null;
+    activeGenerateJobId = jobId;
+    latestJobId = jobId;
+    pollAndShow(jobId, 'edit', prompt);
   } catch (e) {
-    setLoading(false);
-    updatePreviewTime('Elapsed');
     handleJobError(e, 'Failed to edit image');
-  } finally {
-    activeGenerateJobId = null;
   }
 }
 
@@ -254,42 +244,46 @@ function updatePreviewStage(stage = 'queued', mode = 'generate', message = '') {
   previewCurrentStage.title = currentStageLabel;
 }
 
-function setLoading(loading, mode = 'generate') {
-  const btn = document.getElementById('generateBtn');
-  const uploadBtn = document.getElementById('uploadBtn');
-  const editBtn = document.getElementById('editBtn');
+function showPreviewLoading(mode, prompt) {
   const preview = document.getElementById('previewSection');
   const previewImageWrapper = document.getElementById('previewImageWrapper');
   const previewLoading = document.getElementById('previewLoading');
   const previewImg = document.getElementById('previewImage');
-  const isEditing = mode === 'edit';
-  const generateSpinnerHTML = '<span class="spinner"></span> Generating...';
-  const editSpinnerHTML = '<span class="spinner"></span> Editing...';
 
-  btn.disabled = loading;
-  btn.innerHTML = loading && !isEditing ? generateSpinnerHTML : '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Generate';
-  uploadBtn.disabled = loading;
-  editBtn.disabled = loading || !selectedEditImage;
-  editBtn.innerHTML = loading && isEditing ? editSpinnerHTML : '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L12 14l-4 1 1-4 8.586-8.586z"/></svg> Edits';
-  document.getElementById('promptInput').disabled = loading;
-  refreshParameterControls(loading);
+  document.getElementById('previewPrompt').textContent = prompt;
+  updatePreviewTime('Elapsed');
+  preview.classList.remove('hidden');
+  previewImageWrapper.classList.add('preview-loading-active');
+  previewLoading.classList.remove('hidden');
+  updatePreviewStage('queued', mode);
+  previewImg.removeAttribute('src');
+  previewImg.classList.add('hidden');
+  previewImg.style.opacity = '0';
+}
 
-  if (loading) {
-    preview.classList.remove('hidden');
-    previewImageWrapper.classList.add('preview-loading-active');
-    previewLoading.classList.remove('hidden');
-    updatePreviewStage('queued', mode);
-    previewImg.removeAttribute('src');
-    previewImg.classList.add('hidden');
-    previewImg.style.opacity = '0';
-  } else {
-    previewImageWrapper.classList.remove('preview-loading-active');
-    previewLoading.classList.add('hidden');
+async function pollAndShow(jobId, mode, prompt) {
+  try {
+    const data = await pollGenerateJob(jobId, mode);
+    if (latestJobId === jobId) {
+      await showGeneratedImage(data);
+    } else {
+      try { await loadGallery(1, { throwOnError: true }); } catch (_) {}
+    }
+  } catch (e) {
+    if (latestJobId === jobId) {
+      updatePreviewTime('Elapsed');
+      document.getElementById('previewImageWrapper').classList.remove('preview-loading-active');
+      document.getElementById('previewLoading').classList.add('hidden');
+    }
+    handleJobError(e, mode === 'edit' ? 'Failed to edit image' : 'Failed to generate image');
+  } finally {
+    if (activeGenerateJobId === jobId) {
+      activeGenerateJobId = null;
+    }
   }
 }
 
 async function pollGenerateJob(jobId, mode = 'generate') {
-  const loadingText = document.getElementById('previewLoadingText');
   const failedText = mode === 'edit' ? 'Image edit failed' : 'Image generation failed';
   const startedAt = Date.now();
   const timeoutMs = 10 * 60 * 1000;
@@ -317,7 +311,9 @@ async function pollGenerateJob(jobId, mode = 'generate') {
 
       networkFailures += 1;
       lastNetworkError = error;
-      loadingText.textContent = 'Reconnecting...';
+      if (latestJobId === jobId) {
+        document.getElementById('previewLoadingText').textContent = 'Reconnecting...';
+      }
       if (networkFailures >= 8) {
         throw new Error(`${error.message}. The image may still finish; refresh the gallery to check.`);
       }
@@ -334,7 +330,9 @@ async function pollGenerateJob(jobId, mode = 'generate') {
       throw new Error(data.message || failedText);
     }
 
-    updatePreviewStage(data.stage || data.status, data.operation || mode, data.message);
+    if (latestJobId === jobId) {
+      updatePreviewStage(data.stage || data.status, data.operation || mode, data.message);
+    }
   }
 
   if (lastNetworkError) {
