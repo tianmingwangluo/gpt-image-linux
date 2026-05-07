@@ -51,6 +51,12 @@ class AccessStatusResponse(BaseModel):
     expires_at: Optional[str] = None
 
 
+class VersionResponse(BaseModel):
+    version: str
+    github_repo: str = ""
+    release_url: Optional[str] = None
+
+
 def validate_image_size(size: str) -> str:
     if size == "auto":
         return size

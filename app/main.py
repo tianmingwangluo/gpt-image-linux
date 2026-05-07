@@ -27,6 +27,7 @@ from .models import (
     GenerateJobStatus,
     GalleryResponse,
     MessageResponse,
+    VersionResponse,
 )
 from . import storage
 from . import proxy
@@ -99,7 +100,14 @@ IMAGE_UPLOAD_CONTENT_TYPES = {
     ".tiff": "image/tiff",
     ".webp": "image/webp",
 }
-AUTH_EXEMPT_PATHS = {"/", "/api/access", "/api/access/status", "/favicon.ico", "/health"}
+AUTH_EXEMPT_PATHS = {
+    "/",
+    "/api/access",
+    "/api/access/status",
+    "/api/version",
+    "/favicon.ico",
+    "/health",
+}
 AUTH_EXEMPT_PREFIXES = ("/static/",)
 NO_CACHE_PATHS = {"/", "/static/index.html"}
 NO_CACHE_PREFIXES = ("/static/js/",)
@@ -407,6 +415,20 @@ async def index():
 @app.get("/health")
 async def health():
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/api/version", response_model=VersionResponse)
+async def version():
+    release_url = (
+        f"https://github.com/{config.GITHUB_REPO}/releases/latest"
+        if config.GITHUB_REPO
+        else None
+    )
+    return VersionResponse(
+        version=config.APP_VERSION,
+        github_repo=config.GITHUB_REPO,
+        release_url=release_url,
+    )
 
 
 @app.get("/api/access/status", response_model=AccessStatusResponse)

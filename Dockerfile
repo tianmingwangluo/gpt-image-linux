@@ -13,6 +13,7 @@ WORKDIR /app
 RUN mkdir images data && \
     chown -R appuser:appgroup images data
 COPY --from=builder --chown=appuser:appgroup /install /usr/local
+COPY --chown=appuser:appgroup VERSION .
 COPY --chown=appuser:appgroup app/ ./app/
 COPY --chown=appuser:appgroup static/ ./static/
 

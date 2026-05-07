@@ -37,6 +37,7 @@ Key characteristics:
 - gallery with pagination, lightbox, download, download all as ZIP, delete, delete all, copy prompt, and copy image URL
 - optional site access key with session unlock
 - optional IP allowlist and reverse proxy header support
+- app version badge with GitHub release update detection
 
 ## Architecture
 
@@ -115,6 +116,7 @@ README_ZH.md
 Dockerfile
 docker-compose.yml
 .env.example
+VERSION
 requirements.txt
 app/
   __init__.py
@@ -258,6 +260,8 @@ The panel supports these upstream paths:
 | `DEFAULT_API_KEY` | empty | Pre-fill API key |
 | `DEFAULT_API_PATH` | `/v1/images/generations` | Default upstream path |
 | `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | Top-level model used when calling `/v1/responses` |
+| `APP_VERSION` | `VERSION` file | Override the app version shown in the UI and returned by `/api/version` |
+| `GITHUB_REPO` | `Z1rconium/gpt-image-linux` | GitHub `owner/repo` used for release update detection; set empty to disable latest-version checks |
 | `ACCESS_KEY` | empty | Site access key; when set, every non-health route requires unlock |
 | `IP_ALLOWLIST` | empty | Comma-separated allowed IPs/CIDRs |
 | `TRUST_PROXY_HEADERS` | `false` | Read `X-Forwarded-For` or `X-Real-IP` from a trusted reverse proxy |
@@ -273,6 +277,7 @@ The panel supports these upstream paths:
 |--------|------|-------------|
 | `GET` | `/` | Frontend UI |
 | `GET` | `/health` | Health check |
+| `GET` | `/api/version` | Current app version and GitHub release metadata |
 | `GET` | `/api/access/status` | Check access-key session status |
 | `POST` | `/api/access` | Unlock access for 3 hours |
 | `POST` | `/api/settings` | Save the active API preset |
@@ -294,6 +299,9 @@ The panel supports these upstream paths:
 
 ## Runtime behavior notes
 
+- The current app version is read from `APP_VERSION` first, then from the root `VERSION` file.
+- The frontend checks `https://api.github.com/repos/{GITHUB_REPO}/releases/latest` on page load and shows a header badge when a newer release exists.
+- GitHub release checks are cached in browser `localStorage` for 6 hours to avoid rate limits. If the check fails, the UI keeps showing the current version and continues normally.
 - API presets are persisted to the SQLite database configured by `DATABASE_FILE`.
 - If the database has no presets, the default preset is initialized from `DEFAULT_API_URL`, `DEFAULT_API_KEY`, and `DEFAULT_API_PATH`.
 - API keys are masked in the UI but stored as plain text in SQLite.
@@ -316,6 +324,7 @@ Contributions are welcome.
 Helpful guidelines:
 
 - keep backend changes simple and explicit
+- update `VERSION` when a user-visible change or release-worthy fix warrants a new `vMAJOR.MINOR.PATCH` version
 - use FastAPI response models from `app/models.py` where applicable
 - keep persistent storage operations centralized in `app/storage.py`
 - keep upstream API interaction centralized in `app/proxy.py`

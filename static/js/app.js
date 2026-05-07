@@ -57,6 +57,7 @@ import {
   hideError,
   updatePromptLen,
 } from './ui.js';
+import { checkAppVersion } from './version-check.js';
 
 function exposeGlobals() {
   Object.assign(window, {
@@ -103,6 +104,7 @@ function exposeGlobals() {
 async function init() {
   exposeGlobals();
   setUnauthorizedHandler(showAccessGate);
+  checkAppVersion().catch(() => {});
   configureAccess({
     onAuthenticated: async () => {
       await loadGallery();
