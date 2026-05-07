@@ -57,7 +57,7 @@ export function setControlDisabled(id, disabled) {
 }
 
 export function unlockBodyOverflowIfIdle() {
-  const overlayIds = ['lightbox', 'sizeDialog', 'settingsDrawer'];
+  const overlayIds = ['lightbox', 'sizeDialog', 'settingsDrawer', 'jobHistoryDrawer'];
   const allHidden = overlayIds.every(id => {
     const el = document.getElementById(id);
     return !el || el.classList.contains('hidden');

@@ -53,7 +53,15 @@ async def lifespan(app: FastAPI):
         )
     load_api_settings()
     app.state.generate_jobs = {}
-    yield
+    app.state.generate_job_tasks = {}
+    try:
+        yield
+    finally:
+        tasks = list(get_generate_job_tasks().values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(title="GPT Image Panel", lifespan=lifespan)
@@ -292,6 +300,49 @@ def trim_generate_jobs():
         jobs.pop(job_id, None)
 
 
+def get_generate_job_tasks() -> dict[str, asyncio.Task]:
+    tasks = getattr(app.state, "generate_job_tasks", None)
+    if tasks is None:
+        tasks = {}
+        app.state.generate_job_tasks = tasks
+    return tasks
+
+
+def track_generate_job_task(job_id: str, task: asyncio.Task):
+    tasks = get_generate_job_tasks()
+    tasks[job_id] = task
+    task.add_done_callback(
+        lambda _task, tracked_job_id=job_id: get_generate_job_tasks().pop(
+            tracked_job_id,
+            None,
+        )
+    )
+
+
+def build_pending_job(
+    job_id: str,
+    req: GenerateRequest | EditRequest,
+    operation: str,
+    message: str,
+) -> dict:
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "stage": "queued",
+        "message": message,
+        "operation": operation,
+        "prompt": req.prompt,
+        "size": req.size,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "model": req.model,
+        "quality": req.quality,
+        "output_format": req.output_format,
+        "output_compression": req.output_compression,
+        "response_format": req.response_format,
+        "n": req.n,
+    }
+
+
 def set_generate_job_progress(
     job_id: str,
     stage: str,
@@ -495,7 +546,17 @@ async def run_generate_job(
         "stage": "starting_generation",
         "message": "Starting image generation",
         "operation": "generation",
+        "prompt": req.prompt,
+        "size": req.size,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "model": req.model,
+        "quality": req.quality,
+        "output_format": req.output_format,
+        "output_compression": req.output_compression,
+        "response_format": req.response_format,
+        "n": req.n,
+        "api_path": api_path,
+        "api_preset_name": api_preset_name,
     }
 
     try:
@@ -513,7 +574,14 @@ async def run_generate_job(
             ),
         )
         duration = f"{time.monotonic() - started_at:.2f}s"
+    except asyncio.CancelledError:
+        jobs.pop(job_id, None)
+        logger.info("Image generation cancelled: job_id=%s", job_id)
+        raise
     except Exception as e:
+        if job_id not in jobs:
+            logger.info("Image generation stopped after cancellation: job_id=%s", job_id)
+            return
         error_message = get_exception_message(e)
         logger.exception(
             "Image generation failed: job_id=%s error_type=%s api_url=%s api_path=%s model=%s size=%s quality=%s output_format=%s response_format=%s n=%s",
@@ -537,6 +605,10 @@ async def run_generate_job(
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         trim_generate_jobs()
+        return
+
+    if job_id not in jobs:
+        logger.info("Image generation result discarded after cancellation: job_id=%s", job_id)
         return
 
     set_generate_job_progress(
@@ -591,7 +663,17 @@ async def run_edit_job(
         "stage": "starting_edit",
         "message": "Starting image edit",
         "operation": "edit",
+        "prompt": req.prompt,
+        "size": req.size,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "model": req.model,
+        "quality": req.quality,
+        "output_format": req.output_format,
+        "output_compression": req.output_compression,
+        "response_format": req.response_format,
+        "n": req.n,
+        "api_path": "/v1/images/edits",
+        "api_preset_name": api_preset_name,
     }
 
     try:
@@ -611,7 +693,14 @@ async def run_edit_job(
             ),
         )
         duration = f"{time.monotonic() - started_at:.2f}s"
+    except asyncio.CancelledError:
+        jobs.pop(job_id, None)
+        logger.info("Image edit cancelled: job_id=%s", job_id)
+        raise
     except Exception as e:
+        if job_id not in jobs:
+            logger.info("Image edit stopped after cancellation: job_id=%s", job_id)
+            return
         error_message = get_exception_message(e)
         logger.exception(
             "Image edit failed: job_id=%s error_type=%s api_url=%s api_path=%s model=%s size=%s quality=%s output_format=%s response_format=%s n=%s",
@@ -635,6 +724,10 @@ async def run_edit_job(
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         trim_generate_jobs()
+        return
+
+    if job_id not in jobs:
+        logger.info("Image edit result discarded after cancellation: job_id=%s", job_id)
         return
 
     set_generate_job_progress(
@@ -685,16 +778,17 @@ async def generate(req: GenerateRequest):
         raise HTTPException(status_code=400, detail="API Key not configured. Please set it in Settings.")
 
     job_id = str(uuid.uuid4())
-    app.state.generate_jobs[job_id] = {
-        "job_id": job_id,
-        "status": "queued",
-        "stage": "queued",
-        "message": "Queued image generation",
-        "operation": "generation",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    asyncio.create_task(
-        run_generate_job(job_id, api_url, api_key, api_path, api_preset_name, req)
+    app.state.generate_jobs[job_id] = build_pending_job(
+        job_id,
+        req,
+        "generation",
+        "Queued image generation",
+    )
+    track_generate_job_task(
+        job_id,
+        asyncio.create_task(
+            run_generate_job(job_id, api_url, api_key, api_path, api_preset_name, req)
+        ),
     )
 
     return GenerateJobResponse(
@@ -754,25 +848,26 @@ async def edit_image(
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     job_id = str(uuid.uuid4())
-    app.state.generate_jobs[job_id] = {
-        "job_id": job_id,
-        "status": "queued",
-        "stage": "queued",
-        "message": "Queued image edit",
-        "operation": "edit",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    asyncio.create_task(
-        run_edit_job(
-            job_id,
-            api_url,
-            api_key,
-            api_preset_name,
-            req,
-            image_bytes,
-            image.filename or "image.png",
-            get_upload_image_content_type(image),
-        )
+    app.state.generate_jobs[job_id] = build_pending_job(
+        job_id,
+        req,
+        "edit",
+        "Queued image edit",
+    )
+    track_generate_job_task(
+        job_id,
+        asyncio.create_task(
+            run_edit_job(
+                job_id,
+                api_url,
+                api_key,
+                api_preset_name,
+                req,
+                image_bytes,
+                image.filename or "image.png",
+                get_upload_image_content_type(image),
+            )
+        ),
     )
 
     return GenerateJobResponse(
@@ -784,12 +879,39 @@ async def edit_image(
     )
 
 
+@app.get("/api/generate/jobs", response_model=list[GenerateJobStatus])
+async def list_generate_jobs():
+    active_jobs = [
+        job
+        for job in app.state.generate_jobs.values()
+        if job.get("status") in {"queued", "running"}
+    ]
+    active_jobs.sort(key=lambda job: job.get("created_at", ""), reverse=True)
+    return [GenerateJobStatus(**job) for job in active_jobs]
+
+
 @app.get("/api/generate/{job_id}", response_model=GenerateJobStatus)
 async def get_generate_job(job_id: str):
     job = app.state.generate_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Generation job not found")
     return GenerateJobStatus(**job)
+
+
+@app.delete("/api/generate/{job_id}", response_model=MessageResponse)
+async def cancel_generate_job(job_id: str):
+    job = app.state.generate_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Generation job not found")
+    if job.get("status") not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="Generation job already finished")
+
+    app.state.generate_jobs.pop(job_id, None)
+    task = get_generate_job_tasks().pop(job_id, None)
+    if task and not task.done():
+        task.cancel()
+
+    return MessageResponse(status="success", message="Generation job cancelled")
 
 
 @app.get("/api/gallery", response_model=GalleryResponse)

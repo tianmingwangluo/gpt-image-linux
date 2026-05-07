@@ -67,6 +67,16 @@ let lastRequestBody = null;
 let lastAction = 'generate';
 let selectedEditImage = null;
 let generationStartedAt = null;
+let activeGenerateJobId = null;
+const cancelledGenerateJobIds = new Set();
+
+export function markGenerateJobCancelled(jobId) {
+  if (!jobId) return;
+  cancelledGenerateJobIds.add(jobId);
+  if (jobId === activeGenerateJobId) {
+    updatePreviewStage('cancelled', lastAction, 'Job cancelled');
+  }
+}
 
 export function openEditImagePicker() {
   document.getElementById('editImageInput').click();
@@ -126,13 +136,16 @@ export async function generateImage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
     }, 'starting image generation');
+    activeGenerateJobId = job.job_id || null;
     const data = job.image_url ? job : await pollGenerateJob(job.job_id, 'generate');
     await showGeneratedImage(data);
     setLoading(false);
   } catch (e) {
     setLoading(false);
     updatePreviewTime('Elapsed');
-    showError(e.message || 'Failed to generate image');
+    handleJobError(e, 'Failed to generate image');
+  } finally {
+    activeGenerateJobId = null;
   }
 }
 
@@ -170,13 +183,16 @@ export async function editImage() {
       method: 'POST',
       body: formData,
     }, 'starting image edit');
+    activeGenerateJobId = job.job_id || null;
     const data = job.image_url ? job : await pollGenerateJob(job.job_id, 'edit');
     await showGeneratedImage(data);
     setLoading(false);
   } catch (e) {
     setLoading(false);
     updatePreviewTime('Elapsed');
-    showError(e.message || 'Failed to edit image');
+    handleJobError(e, 'Failed to edit image');
+  } finally {
+    activeGenerateJobId = null;
   }
 }
 
@@ -282,6 +298,11 @@ async function pollGenerateJob(jobId, mode = 'generate') {
 
   while (Date.now() - startedAt < timeoutMs) {
     await sleep(2000);
+    if (cancelledGenerateJobIds.has(jobId)) {
+      cancelledGenerateJobIds.delete(jobId);
+      throw new Error('Generation job cancelled');
+    }
+
     let data;
     try {
       data = await apiFetch(
@@ -303,6 +324,11 @@ async function pollGenerateJob(jobId, mode = 'generate') {
       continue;
     }
 
+    if (cancelledGenerateJobIds.has(jobId)) {
+      cancelledGenerateJobIds.delete(jobId);
+      throw new Error('Generation job cancelled');
+    }
+
     if (data.status === 'success') return data;
     if (data.status === 'error') {
       throw new Error(data.message || failedText);
@@ -315,6 +341,18 @@ async function pollGenerateJob(jobId, mode = 'generate') {
     throw new Error(`${lastNetworkError.message}. The image may still finish; refresh the gallery to check.`);
   }
   throw new Error('Image generation is still running. Check the gallery in a bit, or try again.');
+}
+
+function handleJobError(error, fallbackMessage) {
+  const message = error?.message || fallbackMessage;
+  if (/Generation job (cancelled|not found)/i.test(message)) {
+    if (activeGenerateJobId) {
+      cancelledGenerateJobIds.delete(activeGenerateJobId);
+    }
+    return;
+  }
+
+  showError(message);
 }
 
 async function showGeneratedImage(data) {

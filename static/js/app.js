@@ -44,6 +44,14 @@ import {
   regenerate,
 } from './jobs.js';
 import {
+  deleteSelectedGenerateJobs,
+  refreshJobHistory,
+  startJobHistoryPolling,
+  toggleAllGenerateJobs,
+  toggleGenerateJobSelection,
+  toggleJobHistory,
+} from './job-history.js';
+import {
   clampCompressionInput,
   clampQuantityInput,
   hideError,
@@ -65,6 +73,7 @@ function exposeGlobals() {
     deleteActivePreset,
     deleteAllImages,
     deleteImage,
+    deleteSelectedGenerateJobs,
     downloadAll,
     downloadCurrent,
     editImage,
@@ -76,11 +85,16 @@ function exposeGlobals() {
     openEditImagePicker,
     openLightbox,
     openSizeDialog,
+    refreshJobHistory,
     regenerate,
     saveSettings,
     selectSizeBase,
     selectSizeMode,
     selectSizeRatio,
+    startJobHistoryPolling,
+    toggleAllGenerateJobs,
+    toggleGenerateJobSelection,
+    toggleJobHistory,
     toggleSettings,
     unlockAccess,
   });
@@ -93,6 +107,7 @@ async function init() {
     onAuthenticated: async () => {
       await loadGallery();
       await loadSettings();
+      startJobHistoryPolling();
     },
   });
 
@@ -119,6 +134,8 @@ document.addEventListener('keydown', (e) => {
       closeLightbox();
     } else if (!document.getElementById('sizeDialog').classList.contains('hidden')) {
       closeSizeDialog();
+    } else if (!document.getElementById('jobHistoryDrawer').classList.contains('hidden')) {
+      toggleJobHistory();
     } else if (!document.getElementById('settingsDrawer').classList.contains('hidden')) {
       toggleSettings();
     }
