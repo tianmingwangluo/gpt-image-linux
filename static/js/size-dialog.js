@@ -18,7 +18,7 @@ const SIZE_RATIOS = {
 };
 
 let sizeState = {
-  mode: 'ratio',
+  mode: 'auto',
   base: '1K',
   ratio: '1:1',
   customWidth: '1024',
