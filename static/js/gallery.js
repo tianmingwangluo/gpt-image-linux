@@ -12,6 +12,16 @@ let galleryById = new Map();
 let galleryPage = 1;
 let galleryTotalPages = 1;
 let activeLightboxImage = null;
+let galleryFilters = {
+  prompt: '',
+  model: '',
+  preset: '',
+  size: '',
+  dateFrom: '',
+  dateTo: '',
+  favorite: false,
+};
+let galleryFilterDebounce = null;
 
 function formatGalleryTotalSize(totalBytes) {
   const bytes = Number(totalBytes);
@@ -22,10 +32,7 @@ function formatGalleryTotalSize(totalBytes) {
 export async function loadGallery(page = galleryPage, options = {}) {
   const { throwOnError = false } = options;
   try {
-    const params = new URLSearchParams({
-      page: String(page),
-      page_size: String(GALLERY_PAGE_SIZE),
-    });
+    const params = buildGalleryQueryParams(page);
     const data = await apiFetch('/api/gallery?' + params.toString(), {}, 'loading gallery');
     const grid = document.getElementById('galleryGrid');
     const empty = document.getElementById('galleryEmpty');
@@ -38,6 +45,8 @@ export async function loadGallery(page = galleryPage, options = {}) {
 
     count.textContent = data.total > 0 ? `${data.total} image${data.total !== 1 ? 's' : ''}` : '';
     totalSize.textContent = data.total > 0 ? formatGalleryTotalSize(data.total_bytes) : '';
+    renderGalleryFilterOptions(data.filter_options || {});
+    renderGalleryFilterState();
     renderGalleryPagination(data);
 
     if (!data.images || data.images.length === 0) {
@@ -56,6 +65,136 @@ export async function loadGallery(page = galleryPage, options = {}) {
     console.error('Failed to load gallery:', e);
     if (throwOnError) throw e;
   }
+}
+
+function buildGalleryQueryParams(page) {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(GALLERY_PAGE_SIZE),
+  });
+  const trimmedPrompt = galleryFilters.prompt.trim();
+  if (trimmedPrompt) params.set('prompt', trimmedPrompt);
+  if (galleryFilters.model) params.set('model', galleryFilters.model);
+  if (galleryFilters.preset) params.set('preset', galleryFilters.preset);
+  if (galleryFilters.size) params.set('size', galleryFilters.size);
+  if (galleryFilters.dateFrom) params.set('date_from', galleryFilters.dateFrom);
+  if (galleryFilters.dateTo) params.set('date_to', galleryFilters.dateTo);
+  if (galleryFilters.favorite) params.set('favorite', 'true');
+  return params;
+}
+
+function hasGalleryFilters() {
+  return Boolean(
+    galleryFilters.prompt.trim() ||
+    galleryFilters.model ||
+    galleryFilters.preset ||
+    galleryFilters.size ||
+    galleryFilters.dateFrom ||
+    galleryFilters.dateTo ||
+    galleryFilters.favorite
+  );
+}
+
+function renderGalleryFilterState() {
+  const resetBtn = document.getElementById('galleryResetFiltersBtn');
+  const emptyTitle = document.getElementById('galleryEmptyTitle');
+  const emptyText = document.getElementById('galleryEmptyText');
+  const emptyHint = document.getElementById('galleryEmptyHint');
+
+  resetBtn?.classList.toggle('hidden', !hasGalleryFilters());
+  if (!emptyTitle || !emptyText || !emptyHint) return;
+
+  if (hasGalleryFilters()) {
+    emptyTitle.textContent = 'No images match';
+    emptyText.textContent = 'Adjust or reset the gallery filters.';
+    emptyHint.textContent = 'Filtered by prompt, model, preset, size, date, or favorites';
+  } else {
+    emptyTitle.textContent = 'Your gallery is empty';
+    emptyText.textContent = 'Describe the image you want to create and hit Generate to get started';
+    emptyHint.textContent = 'Try a prompt like "A serene mountain lake at sunrise"';
+  }
+}
+
+function renderGalleryFilterOptions(options = {}) {
+  updateGallerySelectOptions('galleryModelFilter', options.models || [], galleryFilters.model, 'All models');
+  updateGallerySelectOptions('galleryPresetFilter', options.presets || [], galleryFilters.preset, 'All presets');
+  updateGallerySelectOptions('gallerySizeFilter', options.sizes || [], galleryFilters.size, 'All sizes');
+}
+
+function updateGallerySelectOptions(id, values, selectedValue, emptyLabel) {
+  const select = document.getElementById(id);
+  if (!select) return;
+
+  const normalizedValues = Array.from(new Set(values.filter(Boolean).map(String)));
+  if (selectedValue && !normalizedValues.includes(selectedValue)) {
+    normalizedValues.unshift(selectedValue);
+  }
+
+  select.innerHTML = [
+    `<option value="">${escapeHtml(emptyLabel)}</option>`,
+    ...normalizedValues.map(value => {
+      const selected = value === selectedValue ? ' selected' : '';
+      return `<option value="${escapeAttribute(value)}"${selected}>${escapeHtml(value)}</option>`;
+    }),
+  ].join('');
+}
+
+export function updateGalleryFilter(key, value, options = {}) {
+  if (!Object.prototype.hasOwnProperty.call(galleryFilters, key)) return;
+  const { debounce = false } = options;
+  galleryFilters = {
+    ...galleryFilters,
+    [key]: key === 'favorite' ? Boolean(value) : String(value || ''),
+  };
+
+  if (galleryFilterDebounce) {
+    clearTimeout(galleryFilterDebounce);
+    galleryFilterDebounce = null;
+  }
+
+  if (debounce) {
+    galleryFilterDebounce = setTimeout(() => {
+      galleryFilterDebounce = null;
+      loadGallery(1);
+    }, 250);
+    return;
+  }
+
+  loadGallery(1);
+}
+
+export function resetGalleryFilters() {
+  if (galleryFilterDebounce) {
+    clearTimeout(galleryFilterDebounce);
+    galleryFilterDebounce = null;
+  }
+  galleryFilters = {
+    prompt: '',
+    model: '',
+    preset: '',
+    size: '',
+    dateFrom: '',
+    dateTo: '',
+    favorite: false,
+  };
+
+  const promptInput = document.getElementById('galleryPromptFilter');
+  const modelSelect = document.getElementById('galleryModelFilter');
+  const presetSelect = document.getElementById('galleryPresetFilter');
+  const sizeSelect = document.getElementById('gallerySizeFilter');
+  const dateFromInput = document.getElementById('galleryDateFromFilter');
+  const dateToInput = document.getElementById('galleryDateToFilter');
+  const favoriteInput = document.getElementById('galleryFavoriteFilter');
+
+  if (promptInput) promptInput.value = '';
+  if (modelSelect) modelSelect.value = '';
+  if (presetSelect) presetSelect.value = '';
+  if (sizeSelect) sizeSelect.value = '';
+  if (dateFromInput) dateFromInput.value = '';
+  if (dateToInput) dateToInput.value = '';
+  if (favoriteInput) favoriteInput.checked = false;
+
+  loadGallery(1);
 }
 
 export function renderGalleryPagination(data = {}) {
@@ -219,6 +358,35 @@ export async function copyLightboxImageUrl(event) {
   }
 }
 
+export async function toggleGalleryFavorite(event, button) {
+  event.stopPropagation();
+  const imageId = button.dataset.imageId || '';
+  const nextFavorite = button.dataset.favorite !== 'true';
+  if (!imageId) return;
+
+  button.disabled = true;
+  try {
+    const updated = await apiFetch('/api/gallery/' + encodeURIComponent(imageId) + '/favorite', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ favorite: nextFavorite }),
+    }, 'updating favorite');
+
+    const normalized = normalizeGalleryImage(updated);
+    galleryById.set(normalized.id, normalized);
+    if (activeLightboxImage?.id === normalized.id) {
+      activeLightboxImage = normalized;
+      renderFavoriteButton(document.getElementById('lightboxFavoriteBtn'), normalized);
+    }
+    await loadGallery(galleryPage);
+    showToast(nextFavorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+  } catch (e) {
+    showToast('Failed to update favorite: ' + e.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 export function normalizeGalleryImage(img) {
   return {
     id: img.id || '',
@@ -238,6 +406,7 @@ export function normalizeGalleryImage(img) {
     api_path: img.api_path || 'Unknown',
     api_preset_name: img.api_preset_name || 'Unknown',
     duration: img.duration || null,
+    favorite: Boolean(img.favorite),
   };
 }
 
@@ -250,6 +419,24 @@ export function clearGalleryState() {
   activeLightboxImage = null;
 }
 
+function renderFavoriteButton(button, image) {
+  if (!button) return;
+  const favorite = Boolean(image?.favorite);
+  const title = favorite ? 'Remove from favorites' : 'Add to favorites';
+  button.dataset.imageId = image?.id || '';
+  button.dataset.favorite = favorite ? 'true' : 'false';
+  button.disabled = !image?.id;
+  button.title = title;
+  button.setAttribute('aria-label', title);
+  button.classList.toggle('text-amber-300', favorite);
+  button.classList.toggle('bg-amber-400/10', favorite);
+  button.classList.toggle('border-amber-500/30', favorite);
+  button.classList.toggle('text-zinc-300', !favorite);
+  button.classList.toggle('bg-zinc-800', !favorite);
+  button.classList.toggle('border-zinc-800', !favorite);
+  button.querySelector('svg')?.setAttribute('fill', favorite ? 'currentColor' : 'none');
+}
+
 export function openLightbox(imageId) {
   const image = galleryById.get(imageId);
   if (!image) return;
@@ -260,6 +447,10 @@ export function openLightbox(imageId) {
     lightboxEditBtn.dataset.imageId = image.id || '';
     lightboxEditBtn.dataset.filename = image.filename || '';
     lightboxEditBtn.disabled = !image.id;
+  }
+  const lightboxFavoriteBtn = document.getElementById('lightboxFavoriteBtn');
+  if (lightboxFavoriteBtn) {
+    renderFavoriteButton(lightboxFavoriteBtn, image);
   }
   const lightboxImg = document.getElementById('lightboxImg');
   lightboxImg.onload = () => {
@@ -305,6 +496,10 @@ export function closeLightbox() {
     lightboxEditBtn.dataset.filename = '';
     lightboxEditBtn.disabled = true;
   }
+  const lightboxFavoriteBtn = document.getElementById('lightboxFavoriteBtn');
+  if (lightboxFavoriteBtn) {
+    renderFavoriteButton(lightboxFavoriteBtn, null);
+  }
   activeLightboxImage = null;
   document.body.style.overflow = '';
 }
@@ -321,12 +516,26 @@ function renderGalleryCard(img) {
   const escapedPromptAttr = escapeAttribute(prompt);
   const escapedFilenameAttr = escapeAttribute(filename);
   const escapedShortPrompt = escapeHtml(shortPrompt);
+  const favoriteClass = img.favorite
+    ? 'text-amber-300 border-amber-500/30 bg-amber-400/10 hover:bg-amber-400/15'
+    : 'text-zinc-300 border-zinc-700/80 bg-zinc-950/80 hover:text-amber-300 hover:border-amber-300/70 hover:bg-zinc-900';
+  const favoriteTitle = img.favorite ? 'Remove from favorites' : 'Add to favorites';
 
   return `
     <div class="gallery-card bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden">
       <div class="relative cursor-pointer group" data-image-id="${escapedImageIdAttr}" onclick="openLightbox(this.dataset.imageId)">
         <img src="${imagePath}" alt="${escapedPromptAttr}"
           class="w-full aspect-square object-cover bg-zinc-800" loading="lazy">
+        <button type="button"
+          onclick="toggleGalleryFavorite(event, this)"
+          data-image-id="${escapedImageIdAttr}"
+          data-favorite="${img.favorite ? 'true' : 'false'}"
+          class="absolute right-2 top-2 z-10 p-1.5 rounded-lg border transition-colors ${favoriteClass}"
+          title="${favoriteTitle}" aria-label="${favoriteTitle}">
+          <svg class="w-3.5 h-3.5" fill="${img.favorite ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11.48 3.499a.6.6 0 011.04 0l2.32 4.701a.6.6 0 00.452.329l5.19.754a.6.6 0 01.333 1.023l-3.755 3.66a.6.6 0 00-.173.531l.887 5.169a.6.6 0 01-.87.632l-4.642-2.441a.6.6 0 00-.558 0l-4.642 2.441a.6.6 0 01-.87-.632l.887-5.169a.6.6 0 00-.173-.531l-3.755-3.66a.6.6 0 01.333-1.023l5.19-.754a.6.6 0 00.452-.329l2.32-4.701z"/>
+          </svg>
+        </button>
         <button type="button"
           onclick="event.stopPropagation(); prepareGalleryImageForEdit(this.dataset.imageId, this.dataset.filename)"
           data-image-id="${escapedImageIdAttr}"

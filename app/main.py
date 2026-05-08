@@ -27,6 +27,8 @@ from .models import (
     GenerateRequest,
     GenerateJobResponse,
     GenerateJobStatus,
+    GalleryEntry,
+    GalleryFavoriteRequest,
     GalleryResponse,
     MessageResponse,
     VersionResponse,
@@ -490,6 +492,51 @@ def build_import_gallery_entries(zip_bytes: bytes) -> list[tuple[bytes, dict]]:
             imports.append((image_bytes, entry))
 
         return imports
+
+
+def normalize_gallery_date_filter(value: str | None, end_of_day: bool = False) -> str | None:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None
+
+    if len(raw_value) == 10:
+        try:
+            datetime.strptime(raw_value, "%Y-%m-%d")
+        except ValueError as e:
+            raise HTTPException(
+                status_code=422,
+                detail="Gallery date filters must use YYYY-MM-DD or ISO datetime",
+            ) from e
+        return f"{raw_value}T{'23:59:59.999999' if end_of_day else '00:00:00'}"
+
+    try:
+        datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError as e:
+        raise HTTPException(
+            status_code=422,
+            detail="Gallery date filters must use YYYY-MM-DD or ISO datetime",
+        ) from e
+    return raw_value
+
+
+def build_gallery_filters(
+    prompt: str | None,
+    model: str | None,
+    preset: str | None,
+    size: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    favorite: bool | None,
+) -> dict:
+    return {
+        "prompt": str(prompt or "").strip(),
+        "model": str(model or "").strip(),
+        "preset": str(preset or "").strip(),
+        "size": str(size or "").strip(),
+        "date_from": normalize_gallery_date_filter(date_from),
+        "date_to": normalize_gallery_date_filter(date_to, end_of_day=True),
+        "favorite": favorite,
+    }
 
 
 def build_job_update(job_id: str, updates: dict) -> dict:
@@ -1440,9 +1487,25 @@ async def cancel_generate_job(job_id: str):
 async def get_gallery_handler(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=9, ge=1, le=100),
+    prompt: str | None = Query(default=None, max_length=4000),
+    model: str | None = Query(default=None, max_length=200),
+    preset: str | None = Query(default=None, max_length=200),
+    size: str | None = Query(default=None, max_length=40),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    favorite: bool | None = Query(default=None),
 ):
-    total = storage.get_gallery_count()
-    total_bytes = storage.get_gallery_total_bytes()
+    filters = build_gallery_filters(
+        prompt=prompt,
+        model=model,
+        preset=preset,
+        size=size,
+        date_from=date_from,
+        date_to=date_to,
+        favorite=favorite,
+    )
+    total = storage.get_gallery_count(filters=filters)
+    total_bytes = storage.get_gallery_total_bytes(filters=filters)
     total_pages = max((total + page_size - 1) // page_size, 1)
     page = min(page, total_pages)
     offset = (page - 1) * page_size
@@ -1455,8 +1518,20 @@ async def get_gallery_handler(
         total_pages=total_pages,
         has_prev=page > 1,
         has_next=page < total_pages,
-        images=storage.get_gallery(limit=page_size, offset=offset),
+        images=storage.get_gallery(limit=page_size, offset=offset, filters=filters),
+        filter_options=storage.get_gallery_filter_options(),
     )
+
+
+@app.patch("/api/gallery/{image_id}/favorite", response_model=GalleryEntry)
+async def update_gallery_favorite(
+    image_id: str,
+    req: GalleryFavoriteRequest,
+):
+    entry = storage.update_gallery_entry(image_id, {"favorite": req.favorite})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Gallery entry not found")
+    return entry
 
 
 @app.get("/api/image/{filename}")

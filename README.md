@@ -34,7 +34,7 @@ Key characteristics:
 - preview UI with prompt, parameters, elapsed time, and detailed English generation/edit stages
 - SSE progress updates for preview state with a polling fallback on stream reconnect failure
 - active job history drawer backed by SSE with selectable cancellation for queued/running generation and edit jobs
-- gallery with pagination, lightbox, per-image "Edit this image" actions, download, export/import ZIP with `metadata.json`, delete, delete all, copy prompt, copy image URL, and total image size display
+- gallery with pagination, prompt/model/preset/size/date/favorites filters, favorite toggles, lightbox, per-image "Edit this image" actions, download, export/import ZIP with `metadata.json`, delete, delete all, copy prompt, copy image URL, and total image size display
 - optional site access key with session unlock
 - optional IP allowlist and reverse proxy header support
 - app version badge with GitHub release update detection
@@ -308,7 +308,8 @@ The panel supports these upstream paths:
 | `GET` | `/api/generate/{job_id}` | Get generation job status or result |
 | `GET` | `/api/generate/{job_id}/events` | Stream generation job status/progress over SSE |
 | `DELETE` | `/api/generate/{job_id}` | Cancel and remove a queued/running generation or edit job |
-| `GET` | `/api/gallery` | List gallery images with pagination |
+| `GET` | `/api/gallery` | List gallery images with pagination and optional `prompt`, `model`, `preset`, `size`, `date_from`, `date_to`, and `favorite` filters |
+| `PATCH` | `/api/gallery/{id}/favorite` | Set or clear a gallery favorite flag |
 | `GET` | `/api/image/{filename}` | Serve image file |
 | `GET` | `/api/download/{filename}` | Download image as attachment |
 | `DELETE` | `/api/gallery/{id}` | Delete gallery entry and its server image file |
@@ -400,7 +401,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 - 预览界面：显示提示词、参数、真实图片分辨率、生成耗时，以及英文 generation/edit 细分阶段
 - 预览进度通过 SSE 实时推送，流断开时退回轮询兜底
 - 历史任务抽屉通过 SSE 更新正在排队/运行的生成和编辑任务，并支持选择后主动终止
-- Gallery：分页、Lightbox、卡片/Lightbox 直接 “Edit this image”、生成所用 preset、下载、导出/导入带 `metadata.json` 的 ZIP、删除、全部删除、复制提示词、复制图片链接、耗时
+- Gallery：分页、按 prompt/model/preset/尺寸/日期/收藏筛选、收藏切换、Lightbox、卡片/Lightbox 直接 “Edit this image”、生成所用 preset、下载、导出/导入带 `metadata.json` 的 ZIP、删除、全部删除、复制提示词、复制图片链接、耗时
 - 可选站点访问密钥
 - 可选 IP 白名单和反向代理头支持
 
@@ -670,7 +671,8 @@ curl http://localhost:9090/health
 | `GET` | `/api/generate/{job_id}` | 查询任务状态或结果 |
 | `GET` | `/api/generate/{job_id}/events` | 通过 SSE 推送单个任务状态和进度 |
 | `DELETE` | `/api/generate/{job_id}` | 取消并移除排队/运行中的生成或编辑任务 |
-| `GET` | `/api/gallery` | 分页查询 Gallery 图片 |
+| `GET` | `/api/gallery` | 分页查询 Gallery 图片，可选 `prompt`、`model`、`preset`、`size`、`date_from`、`date_to`、`favorite` 筛选 |
+| `PATCH` | `/api/gallery/{id}/favorite` | 设置或取消 Gallery 收藏标记 |
 | `GET` | `/api/image/{filename}` | 访问图片文件 |
 | `GET` | `/api/download/{filename}` | 下载图片 |
 | `DELETE` | `/api/gallery/{id}` | 删除 Gallery 条目和对应服务器图片文件 |

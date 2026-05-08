@@ -46,9 +46,10 @@ GALLERY_COLUMNS = (
     "api_path",
     "api_preset_name",
     "duration",
+    "favorite",
 )
 REQUIRED_GALLERY_COLUMNS = {"id", "prompt", "size", "filename", "created_at"}
-INTEGER_GALLERY_COLUMNS = {"image_width", "image_height", "output_compression", "n"}
+INTEGER_GALLERY_COLUMNS = {"image_width", "image_height", "output_compression", "n", "favorite"}
 GENERATE_JOB_COLUMNS = (
     "job_id",
     "status",
@@ -208,13 +209,16 @@ def _ensure_database():
                     n INTEGER,
                     api_path TEXT,
                     api_preset_name TEXT,
-                    duration TEXT
+                    duration TEXT,
+                    favorite INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_gallery_entries_created_at
                     ON gallery_entries(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_gallery_entries_filename
                     ON gallery_entries(filename);
+                CREATE INDEX IF NOT EXISTS idx_gallery_entries_favorite_created_at
+                    ON gallery_entries(favorite, created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS generate_jobs (
                     job_id TEXT PRIMARY KEY,
@@ -250,10 +254,30 @@ def _ensure_database():
                     ON generate_jobs(updated_at DESC);
                 """
             )
+            _migrate_gallery_schema(conn)
             _migrate_legacy_json(conn)
             conn.commit()
 
         _db_initialized = True
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _migrate_gallery_schema(conn: sqlite3.Connection):
+    columns = _table_columns(conn, "gallery_entries")
+    if "favorite" not in columns:
+        conn.execute(
+            "ALTER TABLE gallery_entries ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_gallery_entries_favorite_created_at
+            ON gallery_entries(favorite, created_at DESC)
+        """
+    )
 
 
 def _get_setting_value(conn: sqlite3.Connection, key: str) -> str | None:
@@ -420,10 +444,11 @@ def _normalize_gallery_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
         "size": str(entry.get("size") or ""),
         "filename": str(filename),
         "created_at": str(entry.get("created_at") or _utc_now()),
+        "favorite": _normalize_gallery_favorite(entry.get("favorite")),
     }
 
     for column in GALLERY_COLUMNS:
-        if column in REQUIRED_GALLERY_COLUMNS:
+        if column in REQUIRED_GALLERY_COLUMNS or column == "favorite":
             continue
         value = entry.get(column)
         if value is None:
@@ -439,16 +464,72 @@ def _normalize_gallery_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
     return normalized
 
 
+def _normalize_gallery_favorite(value: Any) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int):
+        return 1 if value else 0
+    text = str(value or "").strip().lower()
+    return 1 if text in {"1", "true", "yes", "on", "favorite", "favorited"} else 0
+
+
 def _gallery_row_values(entry: dict[str, Any]) -> tuple[Any, ...]:
     return tuple(entry.get(column) for column in GALLERY_COLUMNS)
 
 
 def _gallery_entry_from_row(row: sqlite3.Row) -> dict[str, Any]:
-    return {
+    entry = {
         column: row[column]
         for column in GALLERY_COLUMNS
         if column in REQUIRED_GALLERY_COLUMNS or row[column] is not None
     }
+    entry["favorite"] = bool(entry.get("favorite"))
+    return entry
+
+
+def _build_gallery_filter_where(filters: dict[str, Any] | None) -> tuple[str, list[Any]]:
+    if not filters:
+        return "", []
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    prompt = str(filters.get("prompt") or "").strip()
+    if prompt:
+        escaped_prompt = (
+            prompt.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        clauses.append("prompt COLLATE NOCASE LIKE ? ESCAPE '\\'")
+        params.append(f"%{escaped_prompt}%")
+
+    for key, column in (
+        ("model", "model"),
+        ("preset", "api_preset_name"),
+        ("size", "size"),
+    ):
+        value = str(filters.get(key) or "").strip()
+        if value:
+            clauses.append(f"{column} = ?")
+            params.append(value)
+
+    favorite = filters.get("favorite")
+    if favorite is not None:
+        clauses.append("favorite = ?")
+        params.append(1 if favorite else 0)
+
+    date_from = str(filters.get("date_from") or "").strip()
+    if date_from:
+        clauses.append("created_at >= ?")
+        params.append(date_from)
+
+    date_to = str(filters.get("date_to") or "").strip()
+    if date_to:
+        clauses.append("created_at <= ?")
+        params.append(date_to)
+
+    if not clauses:
+        return "", []
+    return " WHERE " + " AND ".join(clauses), params
 
 
 def _normalize_generate_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -798,20 +879,30 @@ async def batch_save_and_update_gallery(
     return [GalleryEntry(**entry) for entry in entries_created]
 
 
-def get_gallery_count() -> int:
+def get_gallery_count(filters: dict[str, Any] | None = None) -> int:
     _ensure_database()
     with _connect() as conn:
-        row = conn.execute("SELECT COUNT(*) FROM gallery_entries").fetchone()
+        where_sql, params = _build_gallery_filter_where(filters)
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM gallery_entries{where_sql}",
+            params,
+        ).fetchone()
         return int(row[0]) if row else 0
 
 
-def get_gallery_total_bytes() -> int:
+def get_gallery_total_bytes(filters: dict[str, Any] | None = None) -> int:
     _ensure_database()
     total_bytes = 0
     seen_filenames: set[str] = set()
     with _connect() as conn:
+        where_sql, params = _build_gallery_filter_where(filters)
         rows = conn.execute(
-            "SELECT DISTINCT filename FROM gallery_entries WHERE filename IS NOT NULL"
+            f"""
+            SELECT DISTINCT filename
+            FROM gallery_entries
+            {where_sql}
+            """,
+            params,
         ).fetchall()
 
     for row in rows:
@@ -831,23 +922,47 @@ def get_gallery_total_bytes() -> int:
 def get_gallery(
     limit: int | None = None,
     offset: int | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> list[GalleryEntry]:
     _ensure_database()
     with _connect() as conn:
+        where_sql, params = _build_gallery_filter_where(filters)
         sql = f"""
             SELECT {", ".join(GALLERY_COLUMNS)}
             FROM gallery_entries
+            {where_sql}
             ORDER BY created_at DESC, rowid DESC
         """
-        params: tuple[object, ...] = ()
+        query_params: list[Any] = list(params)
         if limit is not None:
             sql += " LIMIT ?"
-            params = (limit,)
+            query_params.append(limit)
             if offset is not None:
                 sql += " OFFSET ?"
-                params = (limit, offset)
-        rows = conn.execute(sql, params).fetchall()
+                query_params.append(offset)
+        rows = conn.execute(sql, query_params).fetchall()
     return [GalleryEntry(**_gallery_entry_from_row(row)) for row in rows]
+
+
+def get_gallery_filter_options() -> dict[str, list[str]]:
+    _ensure_database()
+    options: dict[str, list[str]] = {}
+    with _connect() as conn:
+        for key, column in (
+            ("models", "model"),
+            ("presets", "api_preset_name"),
+            ("sizes", "size"),
+        ):
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT {column} AS value
+                FROM gallery_entries
+                WHERE {column} IS NOT NULL AND TRIM({column}) != ''
+                ORDER BY LOWER({column}) ASC
+                """
+            ).fetchall()
+            options[key] = [row["value"] for row in rows if row["value"]]
+    return options
 
 
 def get_gallery_entry(image_id: str) -> GalleryEntry | None:
@@ -911,7 +1026,7 @@ def add_to_gallery_sync(
 
 def update_gallery_entry(image_id: str, updates: dict[str, Any]) -> GalleryEntry | None:
     allowed_updates = {
-        key: value
+        key: _normalize_gallery_favorite(value) if key == "favorite" else value
         for key, value in updates.items()
         if key in GALLERY_COLUMNS and key != "id" and value is not None
     }

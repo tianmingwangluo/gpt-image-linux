@@ -35,6 +35,9 @@ import {
   loadGallery,
   openLightbox,
   openImportArchivePicker,
+  resetGalleryFilters,
+  toggleGalleryFavorite,
+  updateGalleryFilter,
 } from './gallery.js';
 import {
   clearCurrentImage,
@@ -100,10 +103,13 @@ function exposeGlobals() {
     selectSizeRatio,
     startJobHistoryPolling,
     toggleAllGenerateJobs,
+    toggleGalleryFavorite,
     toggleGenerateJobSelection,
     toggleJobHistory,
     toggleSettings,
     unlockAccess,
+    resetGalleryFilters,
+    updateGalleryFilter,
   });
 }
 

@@ -128,6 +128,17 @@ class GalleryEntry(BaseModel):
     api_path: Optional[str] = None
     api_preset_name: Optional[str] = None
     duration: Optional[str] = None
+    favorite: bool = False
+
+
+class GalleryFavoriteRequest(BaseModel):
+    favorite: bool
+
+
+class GalleryFilterOptions(BaseModel):
+    models: list[str] = Field(default_factory=list)
+    presets: list[str] = Field(default_factory=list)
+    sizes: list[str] = Field(default_factory=list)
 
 
 class GenerateResponse(BaseModel):
@@ -196,6 +207,7 @@ class GalleryResponse(BaseModel):
     has_prev: bool
     has_next: bool
     images: list[GalleryEntry]
+    filter_options: GalleryFilterOptions = Field(default_factory=GalleryFilterOptions)
 
 
 class ErrorResponse(BaseModel):

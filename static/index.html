@@ -548,6 +548,61 @@
         </div>
       </div>
 
+      <div class="mb-5 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-500">Prompt</span>
+            <input id="galleryPromptFilter" type="search" placeholder="Search prompt"
+              oninput="updateGalleryFilter('prompt', this.value, { debounce: true })"
+              class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 placeholder-zinc-600 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-500">Model</span>
+            <select id="galleryModelFilter" onchange="updateGalleryFilter('model', this.value)"
+              class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+              <option value="">All models</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-500">Preset</span>
+            <select id="galleryPresetFilter" onchange="updateGalleryFilter('preset', this.value)"
+              class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+              <option value="">All presets</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-500">Size</span>
+            <select id="gallerySizeFilter" onchange="updateGalleryFilter('size', this.value)"
+              class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+              <option value="">All sizes</option>
+            </select>
+          </label>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block">
+              <span class="mb-1.5 block text-xs font-medium text-zinc-500">From</span>
+              <input id="galleryDateFromFilter" type="date" onchange="updateGalleryFilter('dateFrom', this.value)"
+                class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+            </label>
+            <label class="block">
+              <span class="mb-1.5 block text-xs font-medium text-zinc-500">To</span>
+              <input id="galleryDateToFilter" type="date" onchange="updateGalleryFilter('dateTo', this.value)"
+                class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+            </label>
+          </div>
+          <div class="flex items-end gap-3">
+            <label class="flex h-10 flex-1 cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-300 transition-colors hover:border-amber-300/70">
+              <input id="galleryFavoriteFilter" type="checkbox" onchange="updateGalleryFilter('favorite', this.checked)"
+                class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-amber-400">
+              <span>Favorites only</span>
+            </label>
+            <button id="galleryResetFiltersBtn" type="button" onclick="resetGalleryFilters()"
+              class="hidden h-10 shrink-0 rounded-lg border border-zinc-700 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100">
+              Reset
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div id="galleryGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <!-- Cards injected here -->
       </div>
@@ -586,13 +641,13 @@
               </div>
             </div>
           </div>
-          <h3 class="text-base font-semibold text-zinc-300 mb-1.5">Your gallery is empty</h3>
-          <p class="text-sm text-zinc-500 max-w-xs text-center leading-relaxed">Describe the image you want to create and hit Generate to get started</p>
+          <h3 id="galleryEmptyTitle" class="text-base font-semibold text-zinc-300 mb-1.5">Your gallery is empty</h3>
+          <p id="galleryEmptyText" class="text-sm text-zinc-500 max-w-xs text-center leading-relaxed">Describe the image you want to create and hit Generate to get started</p>
           <div class="mt-6 flex items-center gap-1.5 text-xs text-zinc-600">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
             </svg>
-            <span>Try a prompt like "A serene mountain lake at sunrise"</span>
+            <span id="galleryEmptyHint">Try a prompt like "A serene mountain lake at sunrise"</span>
           </div>
         </div>
       </div>
@@ -624,6 +679,14 @@
               <div class="flex items-center justify-between gap-3 mb-2">
                 <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Prompt</h3>
                 <div class="flex items-center gap-1.5">
+                  <button id="lightboxFavoriteBtn" type="button" disabled
+                    onclick="toggleGalleryFavorite(event, this)"
+                    class="p-1.5 rounded-lg border border-zinc-800 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Add to favorites" aria-label="Add to favorites">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11.48 3.499a.6.6 0 011.04 0l2.32 4.701a.6.6 0 00.452.329l5.19.754a.6.6 0 01.333 1.023l-3.755 3.66a.6.6 0 00-.173.531l.887 5.169a.6.6 0 01-.87.632l-4.642-2.441a.6.6 0 00-.558 0l-4.642 2.441a.6.6 0 01-.87-.632l.887-5.169a.6.6 0 00-.173-.531l-3.755-3.66a.6.6 0 01.333-1.023l5.19-.754a.6.6 0 00.452-.329l2.32-4.701z"/>
+                    </svg>
+                  </button>
                   <button id="lightboxEditBtn" type="button" disabled
                     onclick="prepareGalleryImageForEdit(this.dataset.imageId, this.dataset.filename); closeLightbox();"
                     class="px-2.5 py-1.5 rounded-lg bg-sky-600/20 text-xs font-medium text-sky-300 hover:bg-sky-600/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
