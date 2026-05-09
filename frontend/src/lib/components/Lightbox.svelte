@@ -1,0 +1,66 @@
+<script lang="ts">
+  import type { GalleryEntry } from '$lib/api/types';
+  import { downloadUrl, imageUrl } from '$lib/utils/format';
+
+  export let open = false;
+  export let image: GalleryEntry | null = null;
+  export let onClose: () => void = () => {};
+  export let onEdit: (image: GalleryEntry) => void = () => {};
+  export let onFavorite: (image: GalleryEntry) => void = () => {};
+  export let onDelete: (image: GalleryEntry) => void = () => {};
+  export let onCopyPrompt: (image: GalleryEntry) => void = () => {};
+  export let onCopyUrl: (image: GalleryEntry) => void = () => {};
+</script>
+
+{#if open && image}
+  <div class="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4">
+    <button class="absolute inset-0" type="button" aria-label="Close lightbox" on:click={onClose}></button>
+    <div class="lightbox-shell relative">
+      <div class="lightbox-media">
+        <img src={imageUrl(image.filename)} alt={image.prompt} class="lightbox-img" />
+      </div>
+      <aside class="lightbox-details flex min-h-0 flex-col">
+        <div class="flex items-start justify-between gap-3 border-b border-zinc-800 p-5">
+          <div class="min-w-0">
+            <h2 class="text-sm font-semibold text-zinc-100">Image Details</h2>
+            <p class="mt-1 truncate text-xs text-zinc-500">{image.filename}</p>
+          </div>
+          <button type="button" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" on:click={onClose}>x</button>
+        </div>
+        <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+          <div>
+            <div class="mb-1 text-xs font-medium text-zinc-500">Prompt</div>
+            <p class="whitespace-pre-wrap text-sm text-zinc-200">{image.prompt}</p>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <div class="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
+              <div class="text-zinc-600">Size</div>
+              <div class="mt-1 text-zinc-300">{image.size}</div>
+            </div>
+            <div class="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
+              <div class="text-zinc-600">Model</div>
+              <div class="mt-1 truncate text-zinc-300">{image.model || '-'}</div>
+            </div>
+            <div class="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
+              <div class="text-zinc-600">Preset</div>
+              <div class="mt-1 truncate text-zinc-300">{image.api_preset_name || '-'}</div>
+            </div>
+            <div class="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
+              <div class="text-zinc-600">Duration</div>
+              <div class="mt-1 text-zinc-300">{image.duration || '-'}</div>
+            </div>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 border-t border-zinc-800 p-5">
+          <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={() => onEdit(image)}>Edit</button>
+          <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={() => onFavorite(image)}>{image.favorite ? 'Unfavorite' : 'Favorite'}</button>
+          <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={() => onCopyPrompt(image)}>Copy prompt</button>
+          <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={() => onCopyUrl(image)}>Copy URL</button>
+          <a href={downloadUrl(image.filename)} class="rounded-lg border border-zinc-700 px-3 py-2 text-center text-xs text-zinc-300 hover:bg-zinc-800">Download</a>
+          <button type="button" class="rounded-lg border border-red-500/40 px-3 py-2 text-xs text-red-300 hover:bg-red-500/10" on:click={() => onDelete(image)}>Delete</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+{/if}
+

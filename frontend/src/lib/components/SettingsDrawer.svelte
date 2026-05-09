@@ -1,0 +1,138 @@
+<script lang="ts">
+  import type { ApiPath, ApiPreset, SettingsResponse } from '$lib/api/types';
+
+  const MASKED_API_KEY_VALUE = '********';
+
+  export let open = false;
+  export let settings: SettingsResponse | null = null;
+  export let saving = false;
+  export let onClose: () => void = () => {};
+  export let onSave: (body: Record<string, unknown>) => Promise<void> | void = () => {};
+  export let onCreate: () => Promise<void> | void = () => {};
+  export let onActivate: (presetId: string) => Promise<void> | void = () => {};
+  export let onDelete: () => Promise<void> | void = () => {};
+
+  let activePresetId = '';
+  let presetName = '';
+  let apiUrl = '';
+  let apiKey = '';
+  let apiPath: ApiPath = '/v1/images/generations';
+
+  $: activePreset = settings?.presets.find((preset) => preset.id === settings.active_preset_id) || settings?.presets[0] || null;
+  $: if (settings && activePreset) {
+    activePresetId = settings.active_preset_id;
+    presetName = activePreset.name || '';
+    apiUrl = activePreset.api_url || settings.api_url || '';
+    apiKey = activePreset.has_api_key || settings.has_api_key ? MASKED_API_KEY_VALUE : '';
+    apiPath = activePreset.api_path || settings.api_path || '/v1/images/generations';
+  }
+
+  async function save() {
+    await onSave({
+      active_preset_id: activePresetId,
+      preset_name: presetName.trim(),
+      api_url: apiUrl.trim(),
+      api_key: apiKey.trim() === MASKED_API_KEY_VALUE ? null : apiKey.trim(),
+      api_path: apiPath
+    });
+  }
+
+  function keyLabel(preset: ApiPreset) {
+    return preset.has_api_key ? preset.api_key_masked : 'No key';
+  }
+</script>
+
+{#if open}
+  <div class="fixed inset-0 z-50">
+    <button class="drawer-backdrop absolute inset-0" type="button" aria-label="Close settings" on:click={onClose}></button>
+    <aside class="fade-in absolute right-0 top-0 flex h-full w-full max-w-lg flex-col border-l border-zinc-800 bg-zinc-900 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-zinc-800 p-5">
+        <div>
+          <h2 class="text-lg font-semibold text-zinc-100">Settings</h2>
+          <p class="mt-1 text-xs text-zinc-500">API presets and upstream path</p>
+        </div>
+        <button type="button" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" on:click={onClose}>x</button>
+      </div>
+
+      <div class="min-h-0 flex-1 overflow-y-auto p-5">
+        <div class="mb-5 flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-zinc-200">Presets</h3>
+          <div class="flex gap-2">
+            <button type="button" class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800" on:click={onCreate}>
+              New
+            </button>
+            <button
+              type="button"
+              disabled={!settings || settings.presets.length <= 1}
+              class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+              on:click={onDelete}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+
+        <div class="mb-6 max-h-[260px] space-y-2 overflow-y-auto">
+          {#each settings?.presets || [] as preset}
+            <button
+              type="button"
+              class={`w-full rounded-md border px-3 py-2.5 text-left transition-colors ${
+                preset.id === settings?.active_preset_id
+                  ? 'border-emerald-500/70 bg-emerald-500/10 text-zinc-100'
+                  : 'border-zinc-800 bg-zinc-950/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-800/70'
+              }`}
+              on:click={() => onActivate(preset.id)}
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="truncate text-sm font-medium">{preset.name || 'Untitled preset'}</div>
+                  <div class="mt-1 truncate font-mono text-xs text-zinc-500">{preset.api_url || 'No API URL'}</div>
+                </div>
+                <span class="shrink-0 rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] font-medium text-zinc-500">
+                  {preset.id === settings?.active_preset_id ? 'Active' : 'Switch'}
+                </span>
+              </div>
+              <div class="mt-2 flex items-center justify-between gap-3 text-xs text-zinc-500">
+                <span class="truncate font-mono">{preset.api_path}</span>
+                <span class="shrink-0 font-mono">{keyLabel(preset)}</span>
+              </div>
+            </button>
+          {/each}
+        </div>
+
+        <div class="space-y-4">
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-400">Preset name</span>
+            <input bind:value={presetName} class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none" />
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-400">API URL</span>
+            <input bind:value={apiUrl} class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none" placeholder="https://api.example.com" />
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-400">API path</span>
+            <select bind:value={apiPath} class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none">
+              <option value="/v1/images/generations">/v1/images/generations</option>
+              <option value="/v1/responses">/v1/responses</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-400">API key</span>
+            <input bind:value={apiKey} type="password" class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none" />
+          </label>
+        </div>
+      </div>
+
+      <div class="border-t border-zinc-800 p-5">
+        <button
+          type="button"
+          disabled={saving}
+          class="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+          on:click={save}
+        >
+          {saving ? 'Saving...' : 'Save Preset'}
+        </button>
+      </div>
+    </aside>
+  </div>
+{/if}
