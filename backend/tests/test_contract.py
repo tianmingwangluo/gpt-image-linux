@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import main as backend_main
+from backend.app.api import contract_app
 from backend.app.core import settings as config
 from backend.app.repositories import storage
 
@@ -168,6 +170,32 @@ def test_health_and_version(client):
     assert version.json()["version"]
 
 
+def test_frontend_index_uses_csp_nonce(tmp_path, monkeypatch):
+    _configure_runtime(tmp_path)
+    build_dir = tmp_path / "frontend_build"
+    build_dir.mkdir()
+    (build_dir / "index.html").write_text(
+        """
+        <!doctype html>
+        <script>
+          import("/_app/immutable/entry/start.js");
+        </script>
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(contract_app, "FRONTEND_BUILD_DIR", build_dir)
+
+    with TestClient(backend_main.app) as client:
+        resp = client.get("/")
+
+    assert resp.status_code == 200
+    nonce = re.search(r'<script nonce="([^"]+)">', resp.text).group(1)
+    csp = resp.headers["content-security-policy"]
+    assert f"'nonce-{nonce}'" in csp
+    assert f"script-src-elem 'self' 'nonce-{nonce}'" in csp
+    assert "'unsafe-inline'" not in csp.split("script-src-elem", 1)[1].split(";", 1)[0]
+
+
 def test_access_cookie_and_status(tmp_path):
     _configure_runtime(tmp_path, access_key="secret", allow_unauthenticated=False)
     with TestClient(backend_main.app) as client:
@@ -192,6 +220,23 @@ def test_access_cookie_and_status(tmp_path):
         assert status.status_code == 200
         assert status.json()["authenticated"] is True
         assert status.json()["expires_at"]
+
+
+def test_frontend_build_assets_are_available_before_access_unlock(tmp_path, monkeypatch):
+    _configure_runtime(tmp_path, access_key="secret", allow_unauthenticated=False)
+    build_dir = tmp_path / "frontend_build"
+    asset_path = build_dir / "_app" / "immutable" / "entry" / "app.js"
+    asset_path.parent.mkdir(parents=True)
+    asset_path.write_text("console.log('ok');", encoding="utf-8")
+    monkeypatch.setattr(contract_app, "FRONTEND_BUILD_DIR", build_dir)
+
+    with TestClient(backend_main.app) as client:
+        asset = client.get("/_app/immutable/entry/app.js")
+        api = client.get("/api/settings")
+
+    assert asset.status_code == 200
+    assert "console.log('ok')" in asset.text
+    assert api.status_code == 401
 
 
 def test_access_lockout(tmp_path):
