@@ -118,3 +118,33 @@ def validate_image_url(url: str) -> None:
             raise ValueError(
                 f"Image URL hostname '{hostname}' resolves to private/internal IP(s): {resolved_info}"
             )
+
+
+def validate_webhook_url(url: str, allowlist: str = "") -> None:
+    parsed = urlparse(url)
+
+    if parsed.scheme != "https":
+        raise ValueError("Only HTTPS URLs are allowed for webhook callbacks")
+
+    if not parsed.hostname:
+        raise ValueError("Invalid webhook URL: no hostname")
+
+    hostname = parsed.hostname.lower()
+
+    if hostname in BLOCKED_HOSTNAMES:
+        raise ValueError(f"Webhook hostname '{hostname}' is not allowed")
+
+    if allowlist:
+        allowed_hosts = [h.strip().lower() for h in allowlist.split(",") if h.strip()]
+        if hostname not in allowed_hosts:
+            raise ValueError(
+                f"Webhook hostname '{hostname}' is not in the allowlist. Allowed: {', '.join(allowed_hosts)}"
+            )
+
+    _, resolved_ips = resolve_hostname(hostname)
+    for ip in resolved_ips:
+        if is_private_ip(ip):
+            resolved_info = ", ".join(f"'{ip}'" for ip in resolved_ips)
+            raise ValueError(
+                f"Webhook hostname '{hostname}' resolves to private/internal IP(s): {resolved_info}"
+            )

@@ -513,11 +513,14 @@ async function showGeneratedImage(data) {
 }
 
 function getImageRequestBody() {
+  const webhookUrl = document.getElementById('webhookUrlInput')?.value.trim() || '';
   if (isResponsesApiSelected()) {
-    return {
+    const requestBody = {
       prompt: document.getElementById('promptInput').value.trim(),
       model: document.getElementById('modelSelect').value,
     };
+    if (webhookUrl) requestBody.webhook_url = webhookUrl;
+    return requestBody;
   }
 
   const outputFormat = document.getElementById('formatSelect').value;
@@ -530,6 +533,10 @@ function getImageRequestBody() {
     quality: document.getElementById('qualitySelect').value,
     output_format: outputFormat,
   };
+
+  if (webhookUrl) {
+    requestBody.webhook_url = webhookUrl;
+  }
 
   if (responseFormat) {
     requestBody.response_format = responseFormat;

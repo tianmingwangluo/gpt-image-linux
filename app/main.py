@@ -36,6 +36,8 @@ from .models import (
 from . import storage
 from . import proxy
 from . import auth
+from . import ssrf
+from . import webhooks
 
 
 logger = logging.getLogger(__name__)
@@ -87,6 +89,7 @@ async def lifespan(app: FastAPI):
     app.state.generate_job_tasks = {}
     app.state.generate_job_subscribers = {}
     app.state.generate_jobs_subscribers = set()
+    app.state.generate_job_webhooks = {}
     app.state.access_failures: dict[str, tuple[int, float]] = {}
     try:
         yield
@@ -386,6 +389,37 @@ def publish_generate_jobs():
         publish_queue(queue, event)
 
 
+def get_generate_job_webhooks() -> dict[str, str]:
+    webhooks_by_job = getattr(app.state, "generate_job_webhooks", None)
+    if webhooks_by_job is None:
+        webhooks_by_job = {}
+        app.state.generate_job_webhooks = webhooks_by_job
+    return webhooks_by_job
+
+
+def validate_job_webhook_url(webhook_url: str | None) -> str | None:
+    normalized_url = str(webhook_url or "").strip()
+    if not normalized_url:
+        return None
+    try:
+        ssrf.validate_webhook_url(normalized_url, config.WEBHOOK_HOST_ALLOWLIST)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if not config.WEBHOOK_SIGNING_SECRET:
+        raise HTTPException(
+            status_code=422,
+            detail="WEBHOOK_SIGNING_SECRET is required to sign webhook callbacks",
+        )
+    return normalized_url
+
+
+def dispatch_job_webhook(job: dict):
+    webhook_url = get_generate_job_webhooks().pop(job["job_id"], "")
+    if not webhook_url:
+        return
+    asyncio.create_task(webhooks.deliver_webhook(webhook_url, job.copy()))
+
+
 def build_gallery_export_metadata(entries: list) -> dict:
     exported_at = datetime.now(timezone.utc).isoformat()
     images = []
@@ -564,6 +598,8 @@ def store_generate_job(job_id: str, updates: dict) -> dict:
         app.state.generate_jobs.pop(job_id, None)
     storage.upsert_generate_job(job)
     publish_generate_job(job)
+    if status not in ACTIVE_JOB_STATUSES:
+        dispatch_job_webhook(job)
     return job
 
 
@@ -694,6 +730,7 @@ def build_edit_request_from_form(
     output_format: str,
     output_compression: int | None,
     response_format: str | None,
+    webhook_url: str | None,
 ) -> EditRequest:
     try:
         return EditRequest(
@@ -705,6 +742,7 @@ def build_edit_request_from_form(
             output_format=output_format,
             output_compression=output_compression,
             response_format=response_format,
+            webhook_url=webhook_url,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
@@ -732,7 +770,10 @@ def queue_edit_job(
             detail="API Key not configured. Please set it in Settings.",
         )
 
+    webhook_url = validate_job_webhook_url(req.webhook_url)
     job_id = str(uuid.uuid4())
+    if webhook_url:
+        get_generate_job_webhooks()[job_id] = webhook_url
     pending_job = build_pending_job(
         job_id=job_id,
         req=req,
@@ -1227,7 +1268,10 @@ async def generate(req: GenerateRequest):
     if not api_key:
         raise HTTPException(status_code=400, detail="API Key not configured. Please set it in Settings.")
 
+    webhook_url = validate_job_webhook_url(req.webhook_url)
     job_id = str(uuid.uuid4())
+    if webhook_url:
+        get_generate_job_webhooks()[job_id] = webhook_url
     pending_job = build_pending_job(
         job_id=job_id,
         req=req,
@@ -1266,6 +1310,7 @@ async def edit_image(
     output_format: str = Form("png"),
     output_compression: int | None = Form(None),
     response_format: str | None = Form(None),
+    webhook_url: str | None = Form(None),
 ):
     if not is_image_upload(image):
         raise HTTPException(status_code=400, detail="Upload must be an image file.")
@@ -1288,6 +1333,7 @@ async def edit_image(
         output_format=output_format,
         output_compression=output_compression,
         response_format=response_format,
+        webhook_url=webhook_url,
     )
     return queue_edit_job(
         req=req,
@@ -1312,6 +1358,7 @@ async def edit_image_from_gallery(
     output_format: str = Form("png"),
     output_compression: int | None = Form(None),
     response_format: str | None = Form(None),
+    webhook_url: str | None = Form(None),
 ):
     entry = storage.get_gallery_entry(image_id)
     if not entry:
@@ -1343,6 +1390,7 @@ async def edit_image_from_gallery(
         output_format=output_format,
         output_compression=output_compression,
         response_format=response_format,
+        webhook_url=webhook_url,
     )
     image_content_type = (
         mimetypes.guess_type(path.name)[0]
@@ -1476,6 +1524,7 @@ async def cancel_generate_job(job_id: str):
     )
     trim_generate_jobs()
 
+    get_generate_job_webhooks().pop(job_id, None)
     task = get_generate_job_tasks().pop(job_id, None)
     if task and not task.done():
         task.cancel()

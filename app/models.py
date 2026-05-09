@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal, Optional
 from datetime import datetime
+from urllib.parse import urlparse
 
 ApiPath = Literal["/v1/images/generations", "/v1/responses"]
 
@@ -92,11 +93,27 @@ class GenerateRequest(BaseModel):
     output_format: Literal["png", "jpeg", "webp"] = "png"
     output_compression: Optional[int] = Field(default=None, ge=0, le=100)
     response_format: Optional[Literal["url", "b64_json"]] = None
+    webhook_url: Optional[str] = Field(default=None, max_length=2048)
 
     @field_validator("size")
     @classmethod
     def validate_size(cls, value: str) -> str:
         return validate_image_size(value)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def validate_webhook_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        webhook_url = value.strip()
+        if not webhook_url:
+            return None
+        parsed = urlparse(webhook_url)
+        if parsed.scheme != "https":
+            raise ValueError("webhook_url must use https://")
+        if not parsed.hostname:
+            raise ValueError("webhook_url must include a hostname")
+        return webhook_url
 
     @model_validator(mode="after")
     def validate_output_options(self) -> "GenerateRequest":
