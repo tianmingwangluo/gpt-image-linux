@@ -50,7 +50,7 @@
   let toast = '';
 
   let prompt = '';
-  let size = '1024x1024';
+  let size = 'auto';
   let model = 'gpt-image-2';
   let quality: GenerateRequestBody['quality'] = 'auto';
   let outputFormat: GenerateRequestBody['output_format'] = 'png';
@@ -823,4 +823,3 @@
 />
 
 <SizeDialog open={sizeDialogOpen} value={size} onApply={(nextSize) => (size = nextSize)} onClose={() => (sizeDialogOpen = false)} />
-

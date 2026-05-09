@@ -310,6 +310,37 @@ def test_generate_and_sse_contract(client):
     assert job_id in events.text
 
 
+def test_generate_and_edit_default_size_is_auto(client):
+    generate = client.post(
+        "/api/generate",
+        json={
+            "prompt": "default size",
+            "model": "gpt-image-2",
+            "n": 1,
+            "quality": "auto",
+            "output_format": "png",
+        },
+    )
+    assert generate.status_code == 202
+    generate_job = _wait_for_job(client, generate.json()["job_id"])
+    assert generate_job["size"] == "auto"
+
+    edit = client.post(
+        "/api/edits",
+        data={
+            "prompt": "default edit size",
+            "model": "gpt-image-2",
+            "n": 1,
+            "quality": "auto",
+            "output_format": "png",
+        },
+        files={"image": ("input.png", PNG_BYTES, "image/png")},
+    )
+    assert edit.status_code == 202
+    edit_job = _wait_for_job(client, edit.json()["job_id"])
+    assert edit_job["size"] == "auto"
+
+
 def test_edit_upload_and_gallery_flow(client):
     seeded = _fake_gallery_entry("gallery-1", "seed image", "1024x1024", "gallery-1.png")
     assert seeded is not None

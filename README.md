@@ -291,7 +291,7 @@ The panel supports these upstream paths:
 
 ## Image size modes
 
-- `auto` — let the model choose the output size
+- `auto` — default; let the model choose the output size
 - ratio presets — 1K, 2K, or 4K with ratios `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, or `21:9`
 - custom width and height — values are normalized to multiples of 16, max side `3840px`, aspect ratio up to `3:1`, and total pixels between `655360` and `8294400`
 
@@ -705,7 +705,7 @@ curl http://localhost:9090/health
 
 ## 图像尺寸模式
 
-- `auto` — 让模型自动选择输出尺寸
+- `auto` — 默认值；让模型自动选择输出尺寸
 - 比例预设 — 1K / 2K / 4K，支持比例 `1:1`、`4:3`、`3:4`、`16:9`、`9:16`、`21:9`
 - 自定义宽高 — 会归一化到 16 的倍数，最大边 `3840px`，最大纵横比 `3:1`，像素总量在 `655360` 到 `8294400` 之间
 

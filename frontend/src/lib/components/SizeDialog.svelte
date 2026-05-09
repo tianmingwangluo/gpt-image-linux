@@ -1,6 +1,6 @@
 <script lang="ts">
   export let open = false;
-  export let value = '1024x1024';
+  export let value = 'auto';
   export let onApply: (size: string) => void = () => {};
   export let onClose: () => void = () => {};
 
@@ -48,4 +48,3 @@
     </div>
   </div>
 {/if}
-

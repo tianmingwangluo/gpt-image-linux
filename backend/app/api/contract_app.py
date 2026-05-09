@@ -1349,7 +1349,7 @@ async def generate(req: GenerateRequest):
 async def edit_image(
     image: UploadFile = File(...),
     prompt: str = Form(...),
-    size: str = Form("1024x1024"),
+    size: str = Form("auto"),
     model: str = Form("gpt-image-2"),
     n: int = Form(1),
     quality: str = Form("auto"),
@@ -1397,7 +1397,7 @@ async def edit_image(
 async def edit_image_from_gallery(
     image_id: str,
     prompt: str = Form(...),
-    size: str = Form("1024x1024"),
+    size: str = Form("auto"),
     model: str = Form("gpt-image-2"),
     n: int = Form(1),
     quality: str = Form("auto"),

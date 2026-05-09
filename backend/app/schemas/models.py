@@ -86,7 +86,7 @@ def validate_image_size(size: str) -> str:
 
 class GenerateRequest(BaseModel):
     prompt: str = Field(..., max_length=4000)
-    size: str = "1024x1024"
+    size: str = "auto"
     model: str = "gpt-image-2"
     n: int = Field(default=1, ge=1, le=10)
     quality: Literal["auto", "low", "medium", "high"] = "auto"
