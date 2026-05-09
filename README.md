@@ -34,6 +34,7 @@ Key characteristics:
 - preview UI with prompt, parameters, elapsed time, and detailed English generation/edit stages
 - SSE progress updates for preview state with a polling fallback on stream reconnect failure
 - active job history drawer backed by SSE with selectable cancellation for queued/running generation and edit jobs
+- optional per-job webhook callback (`webhook_url`) with HTTPS validation, SSRF protection, signed delivery, and retry
 - gallery with pagination, prompt/model/preset/size/date/favorites filters, favorite toggles, lightbox, per-image "Edit this image" actions, download, export/import ZIP with `metadata.json`, delete, delete all, copy prompt, copy image URL, and total image size display
 - optional site access key with session unlock
 - optional IP allowlist and reverse proxy header support
@@ -88,6 +89,7 @@ Runtime persistent storage is minimal:
 6. the backend saves the file and appends the gallery metadata entry
 7. the frontend listens to `/api/generate/{job_id}/events` and renders each SSE progress update in Preview
 8. the job history drawer listens to `/api/generate/jobs/events`, can refresh via `/api/generate/jobs`, and cancels selected jobs via `DELETE /api/generate/{job_id}`
+9. if `webhook_url` is provided, the backend validates it and asynchronously delivers `image.job.finished` after job completion (with signature headers when configured)
 
 ### Edit flow
 
@@ -285,6 +287,10 @@ The panel supports these upstream paths:
 | `DATA_DIR` | `./data` | Directory for SQLite runtime data |
 | `DATABASE_FILE` | `./data/app.sqlite3` | SQLite database for gallery metadata and API presets |
 | `PYTHON_BASE_IMAGE` | `python:3.11-slim` | Docker build base image; override when Docker Hub is slow or blocked |
+| `WEBHOOK_SIGNING_SECRET` | empty | Required when `webhook_url` is used; used to sign webhook payloads (`X-Webhook-Signature`) |
+| `WEBHOOK_HOST_ALLOWLIST` | empty | Optional comma-separated webhook hostname allowlist |
+| `WEBHOOK_TIMEOUT_SECONDS` | `5` | Webhook delivery timeout per attempt (seconds) |
+| `WEBHOOK_MAX_ATTEMPTS` | `3` | Max webhook delivery retry attempts |
 
 ## Endpoints
 
@@ -324,6 +330,7 @@ The panel supports these upstream paths:
 - GitHub release checks are cached in browser `localStorage` for 6 hours to avoid rate limits. If the check fails, the UI keeps showing the current version and continues normally.
 - API presets are persisted to the SQLite database configured by `DATABASE_FILE`.
 - Generation and edit job history is persisted to SQLite with status, stage, error, timing, request parameters, and result metadata.
+- `/api/generate`, `/api/edits`, and `/api/edits/from-gallery/{image_id}` accept optional `webhook_url`; callback delivery uses async retries and request signing when `WEBHOOK_SIGNING_SECRET` is configured.
 - If the database has no presets, the default preset is initialized from `DEFAULT_API_URL`, `DEFAULT_API_KEY`, and `DEFAULT_API_PATH`.
 - API keys are masked in the UI but stored as plain text in SQLite.
 - Existing `data/settings.json` and `data/gallery.json` files are imported once when the matching database tables are empty.
@@ -401,6 +408,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 - 预览界面：显示提示词、参数、真实图片分辨率、生成耗时，以及英文 generation/edit 细分阶段
 - 预览进度通过 SSE 实时推送，流断开时退回轮询兜底
 - 历史任务抽屉通过 SSE 更新正在排队/运行的生成和编辑任务，并支持选择后主动终止
+- 支持每个任务可选 `webhook_url` 回调：仅允许 HTTPS，带 SSRF 防护、签名投递与重试
 - Gallery：分页、按 prompt/model/preset/尺寸/日期/收藏筛选、收藏切换、Lightbox、卡片/Lightbox 直接 “Edit this image”、生成所用 preset、下载、导出/导入带 `metadata.json` 的 ZIP、删除、全部删除、复制提示词、复制图片链接、耗时
 - 可选站点访问密钥
 - 可选 IP 白名单和反向代理头支持
@@ -454,6 +462,7 @@ npm run build:css
 6. 后端保存文件并写入 Gallery 元数据
 7. 前端监听 `/api/generate/{job_id}/events` 的 SSE 事件，并在 Preview 中实时渲染当前阶段
 8. 历史任务抽屉监听 `/api/generate/jobs/events`，也可通过 `/api/generate/jobs` 手动刷新，并通过 `DELETE /api/generate/{job_id}` 取消选中的任务
+9. 若请求里提供 `webhook_url`，后端会先校验后异步投递 `image.job.finished` 回调；配置签名密钥时会附带签名请求头
 
 ### 编辑流程
 
