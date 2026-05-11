@@ -15,6 +15,7 @@
     AccessStatus,
     ApiPath,
     GalleryEntry,
+    GalleryBatchResponse,
     GalleryResponse,
     GenerateJobResponse,
     GenerateJobStatus,
@@ -47,6 +48,8 @@
   let galleryLoading = false;
   let galleryPage = 1;
   let galleryFilters: GalleryFilters = { ...defaultGalleryFilters };
+  let gallerySelectionMode = false;
+  let selectedGalleryIds = new Set<string>();
   let selectedJobIds = new Set<string>();
   let jobs: GenerateJobStatus[] = [];
   let lightboxImage: GalleryEntry | null = null;
@@ -562,6 +565,9 @@
       const data = await apiFetch<GalleryResponse>(`/api/gallery?${buildGalleryParams(page).toString()}`, {}, 'loading gallery');
       gallery = data;
       galleryPage = data.page;
+      const visibleIds = new Set(data.images.map((image) => image.id));
+      selectedGalleryIds = new Set([...selectedGalleryIds].filter((id) => visibleIds.has(id)));
+      if (selectedGalleryIds.size === 0) gallerySelectionMode = false;
     } finally {
       galleryLoading = false;
     }
@@ -581,6 +587,90 @@
   function resetGalleryFilters() {
     galleryFilters = { ...defaultGalleryFilters };
     void loadGallery(1);
+  }
+
+  function setGallerySelectionMode(enabled: boolean) {
+    gallerySelectionMode = enabled;
+    if (!enabled) selectedGalleryIds = new Set();
+  }
+
+  function toggleGallerySelection(image: GalleryEntry) {
+    const next = new Set(selectedGalleryIds);
+    if (next.has(image.id)) {
+      next.delete(image.id);
+    } else {
+      next.add(image.id);
+    }
+    selectedGalleryIds = next;
+  }
+
+  function selectGalleryPage() {
+    selectedGalleryIds = new Set(gallery?.images.map((image) => image.id) || []);
+  }
+
+  function clearGallerySelection() {
+    selectedGalleryIds = new Set();
+  }
+
+  async function batchFavoriteGallery(favorite: boolean) {
+    const ids = [...selectedGalleryIds];
+    if (!ids.length) return;
+    const result = await apiFetch<GalleryBatchResponse>(
+      '/api/gallery/batch/favorite',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, favorite })
+      },
+      'updating selected favorites'
+    );
+    await loadGallery(galleryPage);
+    if (lightboxImage && ids.includes(lightboxImage.id)) {
+      lightboxImage = { ...lightboxImage, favorite };
+    }
+    showToast($t.messages.selectedImagesFavorited(result.count));
+  }
+
+  async function batchDeleteGallery() {
+    const ids = [...selectedGalleryIds];
+    if (!ids.length || !confirm($t.messages.deleteSelectedConfirm(ids.length))) return;
+    const result = await apiFetch<GalleryBatchResponse>(
+      '/api/gallery/batch/delete',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+      },
+      'deleting selected images'
+    );
+    if (lightboxImage && ids.includes(lightboxImage.id)) lightboxImage = null;
+    if (selectedGalleryImageId && ids.includes(selectedGalleryImageId)) clearEditSource();
+    clearGallerySelection();
+    await loadGallery(galleryPage);
+    showToast($t.messages.selectedImagesDeleted(result.count));
+  }
+
+  async function batchDownloadGallery() {
+    const ids = [...selectedGalleryIds];
+    if (!ids.length) return;
+    const response = await fetch('/api/gallery/batch/download', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/zip', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    if (!response.ok) {
+      throw new Error($t.messages.requestFailed);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'gpt-images-selected.zip';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function toggleFavorite(image: GalleryEntry) {
@@ -928,6 +1018,15 @@
     onImport={importArchive}
     onOpen={(image) => (lightboxImage = image)}
     onEdit={prepareGalleryImageForEdit}
+    selectionMode={gallerySelectionMode}
+    selectedIds={selectedGalleryIds}
+    onSelectionMode={setGallerySelectionMode}
+    onToggleSelection={toggleGallerySelection}
+    onSelectPage={selectGalleryPage}
+    onClearSelection={clearGallerySelection}
+    onBatchDelete={batchDeleteGallery}
+    onBatchFavorite={batchFavoriteGallery}
+    onBatchDownload={batchDownloadGallery}
   />
 </main>
 

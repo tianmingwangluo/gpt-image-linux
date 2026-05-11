@@ -641,6 +641,82 @@ def test_gallery_image_download_and_zip(client):
         assert "thumbnail_url" not in metadata["images"][0]
 
 
+def test_gallery_batch_delete_only_selected_entries(client):
+    _fake_gallery_entry("batch-delete-1", "one", "1024x1024", "batch-delete-1.png")
+    _fake_gallery_entry("batch-delete-2", "two", "1024x1024", "batch-delete-2.png")
+    _fake_gallery_entry("batch-delete-3", "three", "1024x1024", "batch-delete-3.png")
+
+    resp = client.post(
+        "/api/gallery/batch/delete",
+        json={"ids": ["batch-delete-1", "batch-delete-3"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 2
+    assert resp.json()["file_count"] == 2
+    assert storage.get_gallery_entry("batch-delete-1") is None
+    assert storage.get_gallery_entry("batch-delete-2") is not None
+    assert storage.get_gallery_entry("batch-delete-3") is None
+    assert not storage.get_safe_image_path("batch-delete-1.png").exists()
+    assert storage.get_safe_image_path("batch-delete-2.png").exists()
+
+
+def test_gallery_batch_delete_preserves_shared_filename(client):
+    _fake_gallery_entry("shared-1", "one", "1024x1024", "shared.png")
+    storage.add_to_gallery_sync(
+        image_id="shared-2",
+        prompt="two",
+        size="1024x1024",
+        filename="shared.png",
+        metadata={"model": "gpt-image-2"},
+    )
+
+    first = client.post("/api/gallery/batch/delete", json={"ids": ["shared-1"]})
+    assert first.status_code == 200
+    assert first.json()["count"] == 1
+    assert first.json()["file_count"] == 0
+    assert storage.get_safe_image_path("shared.png") is not None
+
+    second = client.post("/api/gallery/batch/delete", json={"ids": ["shared-2"]})
+    assert second.status_code == 200
+    assert second.json()["file_count"] == 1
+    assert not storage.get_safe_image_path("shared.png").exists()
+
+
+def test_gallery_batch_favorite_and_download(client):
+    _fake_gallery_entry("batch-fav-1", "one", "1024x1024", "batch-fav-1.png")
+    _fake_gallery_entry("batch-fav-2", "two", "1024x1024", "batch-fav-2.png")
+    _fake_gallery_entry("batch-fav-3", "three", "1024x1024", "batch-fav-3.png")
+
+    favorite = client.patch(
+        "/api/gallery/batch/favorite",
+        json={"ids": ["batch-fav-1", "batch-fav-3"], "favorite": True},
+    )
+    assert favorite.status_code == 200
+    assert favorite.json()["count"] == 2
+    assert storage.get_gallery_entry("batch-fav-1").favorite is True
+    assert storage.get_gallery_entry("batch-fav-2").favorite is False
+    assert storage.get_gallery_entry("batch-fav-3").favorite is True
+
+    archive = client.post(
+        "/api/gallery/batch/download",
+        json={"ids": ["batch-fav-1", "batch-fav-3"]},
+    )
+    assert archive.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(archive.content)) as zf:
+        assert "images/batch-fav-1.png" in zf.namelist()
+        assert "images/batch-fav-2.png" not in zf.namelist()
+        assert "images/batch-fav-3.png" in zf.namelist()
+
+    unfavorite = client.patch(
+        "/api/gallery/batch/favorite",
+        json={"ids": ["batch-fav-1", "batch-fav-3"], "favorite": False},
+    )
+    assert unfavorite.status_code == 200
+    assert storage.get_gallery_entry("batch-fav-1").favorite is False
+    assert storage.get_gallery_entry("batch-fav-3").favorite is False
+
+
 def test_import_archive(client):
     resp = _post_import_archive(client, _import_archive_bytes())
     assert resp.status_code == 200

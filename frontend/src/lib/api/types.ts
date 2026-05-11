@@ -110,3 +110,9 @@ export type MessageResponse = {
   status: string;
   message: string;
 };
+
+export type GalleryBatchResponse = {
+  status: string;
+  count: number;
+  file_count: number;
+};

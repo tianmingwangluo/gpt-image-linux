@@ -1417,6 +1417,29 @@ def update_gallery_entry(image_id: str, updates: dict[str, Any]) -> GalleryEntry
     return GalleryEntry(**_gallery_entry_from_row(row))
 
 
+def update_gallery_entries_favorite(image_ids: list[str], favorite: bool) -> int:
+    _ensure_database()
+    if not image_ids:
+        return 0
+
+    placeholders = ", ".join("?" for _ in image_ids)
+    with _connect() as conn:
+        with _transaction(conn):
+            rows = conn.execute(
+                f"SELECT id FROM gallery_entries WHERE id IN ({placeholders})",
+                tuple(image_ids),
+            ).fetchall()
+            found_ids = {row["id"] for row in rows}
+            if not found_ids:
+                return 0
+            update_placeholders = ", ".join("?" for _ in found_ids)
+            conn.execute(
+                f"UPDATE gallery_entries SET favorite = ? WHERE id IN ({update_placeholders})",
+                (_normalize_gallery_favorite(favorite), *found_ids),
+            )
+            return len(found_ids)
+
+
 def upsert_generate_job(job: dict[str, Any]) -> dict[str, Any]:
     _ensure_database()
     normalized = _normalize_generate_job(job)
@@ -1605,6 +1628,54 @@ def delete_gallery_image(image_id: str) -> tuple[bool, int]:
                     _delete_thumbnail_unlocked(filename)
 
                 return True, deleted_count
+
+
+def delete_gallery_images(image_ids: list[str]) -> tuple[int, int]:
+    _ensure_database()
+    if not image_ids:
+        return 0, 0
+
+    with _storage_lock:
+        with _connect() as conn:
+            with _transaction(conn):
+                placeholders = ", ".join("?" for _ in image_ids)
+                rows = conn.execute(
+                    f"SELECT id, filename FROM gallery_entries WHERE id IN ({placeholders})",
+                    tuple(image_ids),
+                ).fetchall()
+                if not rows:
+                    return 0, 0
+
+                removed_ids = {row["id"] for row in rows}
+                removed_filenames = {row["filename"] for row in rows if row["filename"]}
+                delete_placeholders = ", ".join("?" for _ in removed_ids)
+                conn.execute(
+                    f"DELETE FROM gallery_entries WHERE id IN ({delete_placeholders})",
+                    tuple(removed_ids),
+                )
+
+                remaining_filenames: set[str] = set()
+                if removed_filenames:
+                    filename_placeholders = ", ".join("?" for _ in removed_filenames)
+                    remaining_rows = conn.execute(
+                        f"""
+                        SELECT DISTINCT filename
+                        FROM gallery_entries
+                        WHERE filename IN ({filename_placeholders})
+                        """,
+                        tuple(removed_filenames),
+                    ).fetchall()
+                    remaining_filenames = {
+                        row["filename"] for row in remaining_rows if row["filename"]
+                    }
+
+                deleted_count = 0
+                for filename in removed_filenames - remaining_filenames:
+                    if _delete_image_unlocked(filename):
+                        deleted_count += 1
+                    _delete_thumbnail_unlocked(filename)
+
+                return len(removed_ids), deleted_count
 
 
 def delete_all_gallery_images() -> tuple[int, int]:

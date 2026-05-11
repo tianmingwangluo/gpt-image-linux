@@ -16,10 +16,21 @@
   export let onImport: (file: File) => void = () => {};
   export let onOpen: (image: GalleryEntry) => void = () => {};
   export let onEdit: (image: GalleryEntry) => void = () => {};
+  export let selectionMode = false;
+  export let selectedIds: Set<string> = new Set();
+  export let onSelectionMode: (enabled: boolean) => void = () => {};
+  export let onToggleSelection: (image: GalleryEntry) => void = () => {};
+  export let onSelectPage: () => void = () => {};
+  export let onClearSelection: () => void = () => {};
+  export let onBatchDelete: () => void = () => {};
+  export let onBatchFavorite: (favorite: boolean) => void = () => {};
+  export let onBatchDownload: () => void = () => {};
 
   let importInput: HTMLInputElement;
 
   $: images = gallery?.images || [];
+  $: selectedCount = selectedIds.size;
+  $: hasSelection = selectedCount > 0;
   $: hasFilters = Boolean(
     filters.prompt.trim() ||
       filters.model ||
@@ -34,6 +45,14 @@
     const file = importInput.files?.[0];
     if (file) onImport(file);
     importInput.value = '';
+  }
+
+  function handleImageClick(image: GalleryEntry) {
+    if (selectionMode) {
+      onToggleSelection(image);
+      return;
+    }
+    onOpen(image);
   }
 
   function handleGalleryAction(event: MouseEvent, action: () => void) {
@@ -55,6 +74,9 @@
       </p>
     </div>
     <div class="flex flex-wrap gap-2">
+      <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={() => onSelectionMode(!selectionMode)}>
+        {selectionMode ? $t.gallery.cancelSelection : $t.gallery.select}
+      </button>
       <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={() => importInput.click()}>
         {$t.gallery.import}
       </button>
@@ -101,6 +123,20 @@
     <button type="button" class="mb-4 text-xs font-medium text-emerald-300 hover:text-emerald-200" on:click={onResetFilters}>{$t.gallery.resetFilters}</button>
   {/if}
 
+  {#if selectionMode}
+    <div class="mb-4 flex flex-col gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div class="text-xs font-medium text-emerald-200">{$t.gallery.selectedCount(selectedCount)}</div>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={onSelectPage}>{$t.gallery.selectAllPage}</button>
+        <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40" disabled={!hasSelection} on:click={onClearSelection}>{$t.gallery.clearSelection}</button>
+        <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40" disabled={!hasSelection} on:click={onBatchDownload}>{$t.gallery.downloadSelected}</button>
+        <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40" disabled={!hasSelection} on:click={() => onBatchFavorite(true)}>{$t.gallery.favoriteSelected}</button>
+        <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40" disabled={!hasSelection} on:click={() => onBatchFavorite(false)}>{$t.gallery.unfavoriteSelected}</button>
+        <button type="button" class="rounded-lg border border-red-500/40 px-3 py-2 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-40" disabled={!hasSelection} on:click={onBatchDelete}>{$t.gallery.deleteSelected}</button>
+      </div>
+    </div>
+  {/if}
+
   {#if loading}
     <div class="rounded-xl border border-zinc-800 bg-zinc-950/40 px-4 py-10 text-center text-sm text-zinc-400">{$t.gallery.loading}</div>
   {:else if images.length === 0}
@@ -111,8 +147,13 @@
   {:else}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {#each images as image}
-        <article class="gallery-card overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/45">
-          <button type="button" class="block aspect-square w-full bg-zinc-950" on:click={() => onOpen(image)}>
+        <article class={`gallery-card overflow-hidden rounded-xl border ${selectedIds.has(image.id) ? 'border-emerald-400 bg-emerald-500/10' : 'border-zinc-800 bg-zinc-950/45'}`}>
+          <button type="button" class="relative block aspect-square w-full bg-zinc-950" on:click={() => handleImageClick(image)}>
+            {#if selectionMode}
+              <span class="absolute left-2 top-2 z-10 rounded-md bg-zinc-950/80 px-2 py-1 text-xs font-medium text-zinc-100">
+                {selectedIds.has(image.id) ? '✓' : ''}
+              </span>
+            {/if}
             <img src={thumbnailUrl(image.filename, image.thumbnail_url)} alt={image.prompt} class="h-full w-full object-cover" loading="lazy" />
           </button>
           <div class="space-y-3 p-3">

@@ -155,6 +155,30 @@ class GalleryFavoriteRequest(BaseModel):
     favorite: bool
 
 
+class GalleryBatchRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, max_length=1000)
+
+    @field_validator("ids")
+    @classmethod
+    def validate_ids(cls, value: list[str]) -> list[str]:
+        ids = [image_id.strip() for image_id in value if image_id.strip()]
+        if not ids:
+            raise ValueError("ids must include at least one gallery entry id")
+        if len(set(ids)) != len(ids):
+            raise ValueError("ids must not contain duplicates")
+        return ids
+
+
+class GalleryBatchFavoriteRequest(GalleryBatchRequest):
+    favorite: bool
+
+
+class GalleryBatchResponse(BaseModel):
+    status: str
+    count: int
+    file_count: int = 0
+
+
 class GalleryFilterOptions(BaseModel):
     models: list[str] = Field(default_factory=list)
     presets: list[str] = Field(default_factory=list)

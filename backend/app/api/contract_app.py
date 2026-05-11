@@ -31,6 +31,9 @@ from ..schemas.models import (
     GenerateRequest,
     GenerateJobResponse,
     GenerateJobStatus,
+    GalleryBatchFavoriteRequest,
+    GalleryBatchRequest,
+    GalleryBatchResponse,
     GalleryEntry,
     GalleryFavoriteRequest,
     GalleryResponse,
@@ -1892,6 +1895,38 @@ async def get_gallery_handler(
         has_next=page < total_pages,
         images=storage.get_gallery(limit=page_size, offset=offset, filters=filters),
         filter_options=storage.get_gallery_filter_options(),
+    )
+
+
+@app.post("/api/gallery/batch/delete", response_model=GalleryBatchResponse)
+async def delete_gallery_batch(req: GalleryBatchRequest):
+    deleted_entries, deleted_files = storage.delete_gallery_images(req.ids)
+    if deleted_entries == 0:
+        raise HTTPException(status_code=404, detail="Gallery entries not found")
+    return GalleryBatchResponse(status="ok", count=deleted_entries, file_count=deleted_files)
+
+
+@app.patch("/api/gallery/batch/favorite", response_model=GalleryBatchResponse)
+async def update_gallery_batch_favorite(req: GalleryBatchFavoriteRequest):
+    updated_entries = storage.update_gallery_entries_favorite(req.ids, req.favorite)
+    if updated_entries == 0:
+        raise HTTPException(status_code=404, detail="Gallery entries not found")
+    return GalleryBatchResponse(status="ok", count=updated_entries)
+
+
+@app.post("/api/gallery/batch/download")
+async def download_gallery_batch(req: GalleryBatchRequest):
+    entries = [entry for image_id in req.ids if (entry := storage.get_gallery_entry(image_id))]
+    if not entries:
+        raise HTTPException(status_code=404, detail="Gallery entries not found")
+
+    temp_path = await asyncio.to_thread(build_gallery_zip_file, entries)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return FileResponse(
+        temp_path,
+        media_type="application/zip",
+        filename=f"gpt-images-selected-{timestamp}.zip",
+        background=BackgroundTask(remove_file, temp_path),
     )
 
 
