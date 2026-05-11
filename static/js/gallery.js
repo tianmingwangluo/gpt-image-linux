@@ -227,11 +227,11 @@ export async function deleteImage(eventOrId, maybeId) {
   const id = maybeId || eventOrId;
   if (!id || !confirm('Delete this image from gallery?')) return;
 
+  closeLightbox();
   try {
     await apiFetch('/api/gallery/' + encodeURIComponent(id), {
       method: 'DELETE',
     }, 'deleting image');
-    if (activeLightboxImage?.id === id) closeLightbox();
     await loadGallery(galleryPage);
     showToast('Image deleted', 'success');
   } catch (e) {
