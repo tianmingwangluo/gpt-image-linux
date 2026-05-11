@@ -696,8 +696,8 @@
   }
 
   function isImageFile(file: File) {
-    if (file.type.startsWith('image/')) return true;
-    return /\.(avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i.test(file.name);
+    if (file.type.startsWith('image/') && file.type !== 'image/svg+xml') return true;
+    return /\.(avif|bmp|gif|heic|heif|ico|jpe?g|png|tiff?|webp)$/i.test(file.name);
   }
 
   async function copyPrompt(image: GalleryEntry) {
@@ -878,7 +878,7 @@
 
     <div class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div class="min-w-0">
-        <input bind:this={editInput} type="file" accept="image/*" class="hidden" on:change={handleEditFile} />
+        <input bind:this={editInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp,image/heic,image/heif,image/x-icon,image/tiff" class="hidden" on:change={handleEditFile} />
         <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={openEditPicker}>
           {$t.promptForm.uploadEditImage}
         </button>

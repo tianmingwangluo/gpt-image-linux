@@ -4,6 +4,7 @@ import json
 import copy
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urljoin
 
 from ..core import settings as config
 from ..core import validators as ssrf
@@ -75,6 +76,63 @@ def get_image_transfer_stage(image_data: dict) -> tuple[str, str]:
     return ("extracting_image_bytes", "Extracting image bytes")
 
 
+MAX_IMAGE_REDIRECTS = 3
+IMAGE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+async def read_limited_response(response: aiohttp.ClientResponse, max_bytes: int) -> bytes:
+    content_length = response.headers.get("Content-Length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise Exception(
+                    f"Image too large: {content_length} bytes (max {max_bytes})"
+                )
+        except ValueError:
+            pass
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in response.content.iter_chunked(IMAGE_DOWNLOAD_CHUNK_SIZE):
+        total += len(chunk)
+        if total > max_bytes:
+            raise Exception(f"Image too large: {total} bytes (max {max_bytes})")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def download_image_url(
+    session: aiohttp.ClientSession,
+    image_url: str,
+    *,
+    max_redirects: int = MAX_IMAGE_REDIRECTS,
+) -> bytes:
+    current_url = image_url
+    max_bytes = config.MAX_FILE_SIZE_MB * 1024 * 1024
+
+    for _ in range(max_redirects + 1):
+        ssrf.validate_image_url(current_url)
+        async with session.get(
+            current_url,
+            headers={"User-Agent": "opencode"},
+            allow_redirects=False,
+        ) as img_resp:
+            if 300 <= img_resp.status < 400:
+                location = img_resp.headers.get("Location")
+                if not location:
+                    raise Exception(f"Image URL redirect missing Location: {current_url}")
+                current_url = urljoin(current_url, location)
+                continue
+            if img_resp.status != 200:
+                raise Exception(
+                    f"Failed to download image from {current_url}: {img_resp.status}"
+                )
+            ssrf.validate_response_peer_ip(img_resp, "Image URL")
+            return await read_limited_response(img_resp, max_bytes)
+
+    raise Exception("Image URL redirected too many times")
+
+
 async def extract_image_bytes(
     session: aiohttp.ClientSession,
     image_data: dict,
@@ -84,20 +142,15 @@ async def extract_image_bytes(
         return base64.b64decode(image_data["b64_json"])
 
     if "url" in image_data and image_data["url"]:
-        image_url = image_data["url"]
-        ssrf.validate_image_url(image_url)
-        async with session.get(
-            image_url, headers={"User-Agent": "opencode"}
-        ) as img_resp:
-            if img_resp.status != 200:
-                raise Exception(
-                    f"Failed to download image from {image_url}: {img_resp.status}"
-                )
-            return await img_resp.read()
+        return await download_image_url(session, image_data["url"])
 
     raise Exception(
         f"No image data (b64_json or url) in upstream response: {response_text}"
     )
+
+
+def validate_generated_image_bytes(image_bytes: bytes, filename: str) -> None:
+    storage.validate_image_bytes(image_bytes, filename=filename)
 
 
 def build_images_request_data(payload: GenerateRequest) -> dict[str, Any]:
@@ -233,8 +286,12 @@ async def call_image_generation_api(
                 )
             request_body = copy.deepcopy(request_data)
             async with session.post(
-                upstream_url, json=request_body, headers=headers
+                upstream_url,
+                json=request_body,
+                headers=headers,
+                allow_redirects=False,
             ) as resp:
+                ssrf.validate_response_peer_ip(resp, "Upstream API")
                 status = resp.status
                 response_text = await resp.text()
                 if progress:
@@ -286,13 +343,14 @@ async def call_image_generation_api(
                                 "validating_image_bytes",
                                 f"Validating decoded image ({image_index + 1}/{len(data)})",
                             )
-                        max_bytes = 50 * 1024 * 1024
+                        max_bytes = config.MAX_FILE_SIZE_MB * 1024 * 1024
                         if len(image_bytes) > max_bytes:
                             raise Exception(
                                 f"Image too large: {len(image_bytes)} bytes (max {max_bytes})"
                             )
                         image_id = storage.generate_image_id()
                         filename = f"{image_id}.{format_info['extension']}"
+                        validate_generated_image_bytes(image_bytes, filename)
                         entries_data.append(
                             (image_bytes, image_id, payload.prompt, payload.size, filename, gallery_metadata)
                         )
@@ -315,7 +373,7 @@ async def call_image_generation_api(
                                 "validating_image_bytes",
                                 f"Validating decoded image ({image_index + 1}/{len(data)})",
                             )
-                        max_bytes = 50 * 1024 * 1024
+                        max_bytes = config.MAX_FILE_SIZE_MB * 1024 * 1024
                         if len(image_bytes) > max_bytes:
                             raise Exception(
                                 f"Image too large: {len(image_bytes)} bytes (max {max_bytes})"
@@ -323,6 +381,7 @@ async def call_image_generation_api(
 
                         image_id = storage.generate_image_id()
                         filename = f"{image_id}.{format_info['extension']}"
+                        validate_generated_image_bytes(image_bytes, filename)
                         if progress:
                             progress(
                                 "saving_image_file",
@@ -401,7 +460,13 @@ async def call_image_edit_api(
     async with aiohttp.ClientSession(timeout=UPSTREAM_TIMEOUT) as session:
         if progress:
             progress("uploading_edit_image", "Uploading source image and edit parameters")
-        async with session.post(upstream_url, data=form, headers=headers) as resp:
+        async with session.post(
+            upstream_url,
+            data=form,
+            headers=headers,
+            allow_redirects=False,
+        ) as resp:
+            ssrf.validate_response_peer_ip(resp, "Upstream API")
             status = resp.status
             response_text = await resp.text()
             if progress:
@@ -459,6 +524,7 @@ async def call_image_edit_api(
 
                 image_id = storage.generate_image_id()
                 filename = f"{image_id}.{format_info['extension']}"
+                validate_generated_image_bytes(edited_image_bytes, filename)
                 entries_data.append(
                     (
                         edited_image_bytes,

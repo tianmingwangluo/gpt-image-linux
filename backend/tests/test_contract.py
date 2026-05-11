@@ -147,6 +147,68 @@ def _post_import_archive(client: TestClient, archive_bytes: bytes):
     )
 
 
+class _FakeStreamContent:
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+
+    async def iter_chunked(self, _size: int):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeTransport:
+    def __init__(self, peer_ip: str):
+        self.peer_ip = peer_ip
+
+    def get_extra_info(self, name: str):
+        if name == "peername":
+            return (self.peer_ip, 443)
+        return None
+
+
+class _FakeConnection:
+    def __init__(self, peer_ip: str):
+        self.transport = _FakeTransport(peer_ip)
+
+
+class _FakeResponse:
+    def __init__(
+        self,
+        status: int,
+        headers: dict[str, str] | None = None,
+        chunks: list[bytes] | None = None,
+        peer_ip: str | None = None,
+    ):
+        self.status = status
+        self.headers = headers or {}
+        self.content = _FakeStreamContent(chunks or [])
+        self.connection = _FakeConnection(peer_ip) if peer_ip else None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeSession:
+    def __init__(self, responses: list[_FakeResponse]):
+        self.responses = responses
+        self.requested_urls: list[str] = []
+        self.allow_redirects_values: list[bool | None] = []
+
+    def get(self, url, **kwargs):
+        self.requested_urls.append(url)
+        self.allow_redirects_values.append(kwargs.get("allow_redirects"))
+        return self.responses.pop(0)
+
+
+async def _download_with_fake_session(session: _FakeSession, image_url: str):
+    from backend.app.integrations import upstream_client
+
+    return await upstream_client.download_image_url(session, image_url)
+
+
 @pytest.fixture(autouse=True)
 def patch_upstream(monkeypatch):
     async def fake_generation_api(api_url, api_key, api_path, payload, api_preset_name=None, progress=None):
@@ -580,6 +642,89 @@ def test_upload_rejects_svg(client):
     assert resp.json()["detail"] == "Upload must be an image file."
 
 
+
+
+def test_upload_rejects_mismatched_png_content(client):
+    resp = client.post(
+        "/api/edits",
+        data={
+            "prompt": "fake png",
+            "model": "gpt-image-2",
+            "n": 1,
+            "quality": "auto",
+            "output_format": "png",
+        },
+        files={"image": ("input.png", b"<svg></svg>", "image/png")},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Image data must be a supported raster image format"
+
+
+def test_import_archive_skips_mismatched_png_content(client):
+    resp = _post_import_archive(
+        client,
+        _import_archive_bytes(image_name="images/fake.png", image_bytes=b"<svg></svg>"),
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "No importable images found"
+
+
+def test_safe_image_paths_reject_traversal(client):
+    assert storage.get_safe_image_path("gallery-zip.png") is not None
+    assert storage.get_safe_image_path("../secret.png") is None
+    assert storage.get_safe_image_path("nested/secret.png") is None
+
+    image = client.get("/api/image/..%2Fsecret.png")
+    download = client.get("/api/download/..%2Fsecret.png")
+
+    assert image.status_code == 404
+    assert download.status_code == 404
+
+
+def test_download_all_skips_polluted_gallery_filename(client):
+    _fake_gallery_entry("safe", "safe", "1024x1024", "safe.png")
+    storage.add_to_gallery_sync(
+        image_id="polluted",
+        prompt="polluted",
+        size="1024x1024",
+        filename="../secret.png",
+        image_bytes=None,
+    )
+
+    archive = client.get("/api/download-all")
+
+    assert archive.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(archive.content)) as zf:
+        assert "images/safe.png" in zf.namelist()
+        assert all("secret" not in name for name in zf.namelist())
+
+
+def test_edit_from_gallery_rejects_polluted_filename(client):
+    storage.add_to_gallery_sync(
+        image_id="polluted",
+        prompt="polluted",
+        size="1024x1024",
+        filename="../secret.png",
+        image_bytes=None,
+    )
+
+    resp = client.post(
+        "/api/edits/from-gallery/polluted",
+        data={
+            "prompt": "edit polluted",
+            "model": "gpt-image-2",
+            "n": 1,
+            "quality": "auto",
+            "output_format": "png",
+        },
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Gallery image file not found"
+
+
 def test_generate_queue_capacity_and_concurrency_limit(tmp_path, monkeypatch):
     _configure_runtime(tmp_path)
     config.MAX_ACTIVE_GENERATE_JOBS = 1
@@ -721,6 +866,99 @@ def test_edit_jobs_share_queue_capacity(tmp_path, monkeypatch):
         release_event.set()
         assert _wait_for_job(client, generate.json()["job_id"])["status"] == "success"
         assert _wait_for_job(client, edit.json()["job_id"])["status"] == "success"
+
+
+
+def test_image_url_download_disables_redirects_and_validates_redirect_target(client):
+    session = _FakeSession(
+        [
+            _FakeResponse(302, {"Location": "http://127.0.0.1/secret.png"}),
+        ]
+    )
+
+    with pytest.raises(ValueError):
+        asyncio.run(_download_with_fake_session(session, "https://example.com/image.png"))
+
+    assert session.requested_urls == ["https://example.com/image.png"]
+    assert session.allow_redirects_values == [False]
+
+
+def test_image_url_download_rejects_large_content_length(client):
+    config.MAX_FILE_SIZE_MB = 0
+    session = _FakeSession(
+        [
+            _FakeResponse(200, {"Content-Length": "1"}, [b"x"]),
+        ]
+    )
+
+    with pytest.raises(Exception, match="Image too large"):
+        asyncio.run(_download_with_fake_session(session, "https://example.com/image.png"))
+
+    assert session.allow_redirects_values == [False]
+
+
+def test_image_url_download_rejects_stream_over_limit(client):
+    config.MAX_FILE_SIZE_MB = 0
+    session = _FakeSession(
+        [
+            _FakeResponse(200, {}, [b"x"]),
+        ]
+    )
+
+    with pytest.raises(Exception, match="Image too large"):
+        asyncio.run(_download_with_fake_session(session, "https://example.com/image.png"))
+
+
+def test_image_url_download_rejects_private_peer_ip(client):
+    session = _FakeSession(
+        [
+            _FakeResponse(200, {}, [PNG_BYTES], peer_ip="127.0.0.1"),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="private/internal IP"):
+        asyncio.run(_download_with_fake_session(session, "https://example.com/image.png"))
+
+
+def test_running_progress_persists_only_terminal_states(tmp_path, monkeypatch):
+    _configure_runtime(tmp_path)
+    upserted: list[dict] = []
+    real_upsert = storage.upsert_generate_job
+
+    def tracking_upsert(job):
+        upserted.append(job.copy())
+        return real_upsert(job)
+
+    async def noisy_generation_api(api_url, api_key, api_path, payload, api_preset_name=None, progress=None):
+        if progress:
+            for index in range(5):
+                progress(f"stage_{index}", f"Stage {index}")
+        image_id = storage.generate_image_id()
+        filename = f"{image_id}.png"
+        entry = await storage.add_to_gallery_async(
+            image_bytes=PNG_BYTES,
+            image_id=image_id,
+            prompt=payload.prompt,
+            size=payload.size,
+            filename=filename,
+            metadata={"api_path": api_path, "api_preset_name": api_preset_name},
+        )
+        return [entry]
+
+    monkeypatch.setattr(storage, "upsert_generate_job", tracking_upsert)
+    monkeypatch.setattr(backend_main.proxy, "call_image_generation_api", noisy_generation_api)
+
+    with TestClient(backend_main.app) as client:
+        resp = client.post("/api/generate", json={"prompt": "noisy", "model": "gpt-image-2"})
+        assert resp.status_code == 202
+        job = _wait_for_job(client, resp.json()["job_id"])
+
+    assert job["status"] == "success"
+    assert [item["status"] for item in upserted].count("queued") == 1
+    assert [item["status"] for item in upserted].count("success") == 1
+    running_upserts = [item for item in upserted if item["status"] == "running"]
+    assert len(running_upserts) <= 2
+    assert any(item.get("stage") == "starting_generation" for item in running_upserts)
 
 
 def test_validation_422_and_global_500(tmp_path, monkeypatch):

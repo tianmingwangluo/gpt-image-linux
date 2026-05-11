@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     app.state.generate_job_semaphore = asyncio.Semaphore(config.MAX_ACTIVE_GENERATE_JOBS)
     app.state.generate_job_subscribers = {}
     app.state.generate_jobs_subscribers = set()
-    app.state.generate_job_webhooks = {}
+    app.state.generate_job_last_persist_at = {}
     app.state.access_failures: dict[str, tuple[int, float]] = {}
     try:
         yield
@@ -143,6 +143,7 @@ app = FastAPI(title="GPT Image Panel", lifespan=lifespan)
 FRONTEND_BUILD_DIR = config.PROJECT_ROOT / "frontend" / "build"
 
 MAX_GENERATE_JOBS = 100
+GENERATE_JOB_PERSIST_INTERVAL_SECONDS = 2.0
 
 
 def max_upload_bytes() -> int:
@@ -157,33 +158,10 @@ def import_max_uncompressed_bytes() -> int:
     return config.IMPORT_MAX_UNCOMPRESSED_MB * 1024 * 1024
 
 
-IMAGE_UPLOAD_EXTENSIONS = {
-    ".avif",
-    ".bmp",
-    ".gif",
-    ".heic",
-    ".heif",
-    ".ico",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".tif",
-    ".tiff",
-    ".webp",
-}
+IMAGE_UPLOAD_EXTENSIONS = storage.IMAGE_FILE_EXTENSIONS
 IMAGE_UPLOAD_CONTENT_TYPES = {
-    ".avif": "image/avif",
-    ".bmp": "image/bmp",
-    ".gif": "image/gif",
-    ".heic": "image/heic",
-    ".heif": "image/heif",
-    ".ico": "image/x-icon",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".tif": "image/tiff",
-    ".tiff": "image/tiff",
-    ".webp": "image/webp",
+    extension: storage.IMAGE_FORMAT_CONTENT_TYPES[image_format]
+    for extension, image_format in storage.IMAGE_EXTENSION_FORMATS.items()
 }
 AUTH_EXEMPT_PATHS = {
     "/",
@@ -483,7 +461,11 @@ def build_gallery_export_metadata(entries: list) -> dict:
     images = []
     for entry in entries:
         data = entry.model_dump()
-        path = storage.get_image_path(entry.filename)
+        path = storage.get_safe_image_path(entry.filename)
+        if not path:
+            data["bytes"] = None
+            images.append(data)
+            continue
         try:
             stat = path.stat()
             data["bytes"] = stat.st_size
@@ -513,8 +495,8 @@ def build_gallery_zip_file(entries: list[GalleryEntry]) -> Path:
     try:
         with zipfile.ZipFile(temp_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for entry in entries:
-                path = storage.get_image_path(entry.filename)
-                if not path.exists():
+                path = storage.get_safe_image_path(entry.filename)
+                if not path or not path.exists():
                     continue
 
                 name = path.name
@@ -662,6 +644,17 @@ def build_import_gallery_entries(zip_bytes: bytes) -> list[tuple[bytes, dict]]:
                     status_code=400,
                     detail="Imported image is too large",
                 )
+            try:
+                storage.validate_image_bytes(
+                    image_bytes,
+                    filename=Path(exported_filename or zip_name).name,
+                    content_type=IMAGE_UPLOAD_CONTENT_TYPES.get(
+                        Path(zip_name).suffix.lower(),
+                        "",
+                    ),
+                )
+            except ValueError:
+                continue
 
             original_name = Path(exported_filename or zip_name).name
             filename = sanitize_import_filename(original_name)
@@ -750,14 +743,37 @@ def build_job_update(job_id: str, updates: dict) -> dict:
     return job
 
 
-def store_generate_job(job_id: str, updates: dict) -> dict:
+def should_persist_generate_job(job_id: str, job: dict, persist: bool) -> bool:
+    if persist:
+        return True
+    if job.get("status") != "running":
+        return True
+
+    last_persist_at = getattr(app.state, "generate_job_last_persist_at", None)
+    if last_persist_at is None:
+        last_persist_at = {}
+        app.state.generate_job_last_persist_at = last_persist_at
+
+    now = time.monotonic()
+    previous = last_persist_at.get(job_id)
+    if previous is None or now - previous >= GENERATE_JOB_PERSIST_INTERVAL_SECONDS:
+        last_persist_at[job_id] = now
+        return True
+    return False
+
+
+def store_generate_job(job_id: str, updates: dict, *, persist: bool = True) -> dict:
     job = build_job_update(job_id, updates)
     status = job.get("status")
     if status in ACTIVE_JOB_STATUSES:
         app.state.generate_jobs[job_id] = job
     else:
         app.state.generate_jobs.pop(job_id, None)
-    storage.upsert_generate_job(job)
+        last_persist_at = getattr(app.state, "generate_job_last_persist_at", None)
+        if last_persist_at is not None:
+            last_persist_at.pop(job_id, None)
+    if should_persist_generate_job(job_id, job, persist):
+        storage.upsert_generate_job(job)
     publish_generate_job(job)
     if status not in ACTIVE_JOB_STATUSES:
         dispatch_job_webhook(job)
@@ -871,6 +887,7 @@ def set_generate_job_progress(
             "message": message,
             "operation": operation,
         },
+        persist=False,
     )
 
 
@@ -886,13 +903,24 @@ def is_image_upload(upload: UploadFile) -> bool:
         return False
 
     if upload.content_type and upload.content_type.startswith("image/"):
-        return upload.content_type != "image/svg+xml"
+        return upload.content_type != "image/svg+xml" and upload.content_type in storage.IMAGE_CONTENT_TYPE_FORMATS
 
     guessed_type = mimetypes.guess_type(upload.filename or "")[0]
     if guessed_type and guessed_type.startswith("image/"):
-        return guessed_type != "image/svg+xml"
+        return guessed_type != "image/svg+xml" and guessed_type in storage.IMAGE_CONTENT_TYPE_FORMATS
 
     return True
+
+
+def validate_upload_image_bytes(image_bytes: bytes, filename: str, content_type: str) -> str:
+    try:
+        return storage.validate_image_bytes(
+            image_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 def get_upload_image_content_type(upload: UploadFile) -> str:
@@ -971,9 +999,7 @@ def queue_edit_job(
         api_path="/v1/images/edits",
         api_preset_name=api_preset_name,
     )
-    app.state.generate_jobs[job_id] = pending_job
-    storage.upsert_generate_job(pending_job)
-    publish_generate_job(pending_job)
+    store_generate_job(job_id, pending_job)
     track_generate_job_task(
         job_id,
         asyncio.create_task(
@@ -1489,9 +1515,7 @@ async def generate(req: GenerateRequest):
         api_path=api_path,
         api_preset_name=api_preset_name,
     )
-    app.state.generate_jobs[job_id] = pending_job
-    storage.upsert_generate_job(pending_job)
-    publish_generate_job(pending_job)
+    store_generate_job(job_id, pending_job)
     track_generate_job_task(
         job_id,
         asyncio.create_task(
@@ -1533,6 +1557,13 @@ async def edit_image(
             detail=f"Uploaded image is too large. Max size is {config.MAX_FILE_SIZE_MB} MB.",
         )
 
+    image_content_type = get_upload_image_content_type(image)
+    validate_upload_image_bytes(
+        image_bytes,
+        image.filename or "",
+        image_content_type,
+    )
+
     req = build_edit_request_from_form(
         prompt=prompt,
         size=size,
@@ -1548,7 +1579,7 @@ async def edit_image(
         req=req,
         image_bytes=image_bytes,
         image_filename=image.filename or "image.png",
-        image_content_type=get_upload_image_content_type(image),
+        image_content_type=image_content_type,
     )
 
 
@@ -1573,8 +1604,8 @@ async def edit_image_from_gallery(
     if not entry:
         raise HTTPException(status_code=404, detail="Gallery entry not found")
 
-    path = storage.get_image_path(entry.filename)
-    if not path.exists():
+    path = storage.get_safe_image_path(entry.filename)
+    if not path or not path.exists():
         raise HTTPException(status_code=404, detail="Gallery image file not found")
 
     try:
@@ -1590,6 +1621,12 @@ async def edit_image_from_gallery(
             detail=f"Gallery image is too large. Max size is {config.MAX_FILE_SIZE_MB} MB.",
         )
 
+    image_content_type = (
+        mimetypes.guess_type(path.name)[0]
+        or IMAGE_UPLOAD_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    )
+    validate_upload_image_bytes(image_bytes, path.name, image_content_type)
+
     req = build_edit_request_from_form(
         prompt=prompt,
         size=size,
@@ -1600,10 +1637,6 @@ async def edit_image_from_gallery(
         output_compression=output_compression,
         response_format=response_format,
         webhook_url=webhook_url,
-    )
-    image_content_type = (
-        mimetypes.guess_type(path.name)[0]
-        or IMAGE_UPLOAD_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
     )
     return queue_edit_job(
         req=req,
@@ -1792,29 +1825,35 @@ async def update_gallery_favorite(
     return entry
 
 
-@app.get("/api/image/{filename}")
-async def serve_image(filename: str):
-    path = storage.get_image_path(filename)
-    if not path.exists():
+async def _image_file_response(filename: str, *, download: bool = False):
+    path = storage.get_safe_image_path(filename)
+    if not path or not path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
+
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    if download:
+        extension = path.suffix.lstrip(".") or "png"
+        return FileResponse(
+            path,
+            media_type=media_type,
+            filename=f"gpt-image-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.{extension}",
+        )
+
     return FileResponse(
         path,
-        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+        media_type=media_type,
         headers={"Cache-Control": "public, max-age=31536000"},
     )
 
 
+@app.get("/api/image/{filename}")
+async def serve_image(filename: str):
+    return await _image_file_response(filename)
+
+
 @app.get("/api/download/{filename}")
 async def download_image(filename: str):
-    path = storage.get_image_path(filename)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Image not found")
-    extension = path.suffix.lstrip(".") or "png"
-    return FileResponse(
-        path,
-        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
-        filename=f"gpt-image-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.{extension}",
-    )
+    return await _image_file_response(filename, download=True)
 
 
 @app.get("/api/download-all")

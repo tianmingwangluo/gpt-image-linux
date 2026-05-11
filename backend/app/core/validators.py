@@ -68,6 +68,29 @@ def resolve_hostname(hostname: str) -> tuple[str, list[str]]:
     return hostname, list(dict.fromkeys(resolved_ips))
 
 
+def response_peer_ip(response: object) -> str | None:
+    connection = getattr(response, "connection", None)
+    transport = getattr(connection, "transport", None)
+    if transport is None:
+        protocol = getattr(response, "_protocol", None)
+        transport = getattr(protocol, "transport", None)
+    if transport is None:
+        return None
+
+    peername = transport.get_extra_info("peername")
+    if isinstance(peername, tuple) and peername:
+        return str(peername[0])
+    if isinstance(peername, str):
+        return peername
+    return None
+
+
+def validate_response_peer_ip(response: object, context: str) -> None:
+    peer_ip = response_peer_ip(response)
+    if peer_ip and is_private_ip(peer_ip):
+        raise ValueError(f"{context} connected to private/internal IP: {peer_ip}")
+
+
 def validate_upstream_url(url: str, allowlist: str) -> None:
     parsed = urlparse(url)
 

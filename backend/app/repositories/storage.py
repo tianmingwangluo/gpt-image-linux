@@ -23,10 +23,51 @@ IMAGE_FILE_EXTENSIONS = {
     ".jpg",
     ".jpeg",
     ".png",
-    ".svg",
     ".tif",
     ".tiff",
     ".webp",
+}
+
+IMAGE_EXTENSION_FORMATS = {
+    ".avif": "avif",
+    ".bmp": "bmp",
+    ".gif": "gif",
+    ".heic": "heif",
+    ".heif": "heif",
+    ".ico": "ico",
+    ".jpg": "jpeg",
+    ".jpeg": "jpeg",
+    ".png": "png",
+    ".tif": "tiff",
+    ".tiff": "tiff",
+    ".webp": "webp",
+}
+IMAGE_CONTENT_TYPE_FORMATS = {
+    "image/avif": "avif",
+    "image/bmp": "bmp",
+    "image/gif": "gif",
+    "image/heic": "heif",
+    "image/heif": "heif",
+    "image/ico": "ico",
+    "image/icon": "ico",
+    "image/jpeg": "jpeg",
+    "image/pjpeg": "jpeg",
+    "image/png": "png",
+    "image/tiff": "tiff",
+    "image/vnd.microsoft.icon": "ico",
+    "image/webp": "webp",
+    "image/x-icon": "ico",
+}
+IMAGE_FORMAT_CONTENT_TYPES = {
+    "avif": "image/avif",
+    "bmp": "image/bmp",
+    "gif": "image/gif",
+    "heif": "image/heif",
+    "ico": "image/x-icon",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "tiff": "image/tiff",
+    "webp": "image/webp",
 }
 
 GALLERY_COLUMNS = (
@@ -646,6 +687,57 @@ def generate_image_id() -> str:
     return str(uuid.uuid4())
 
 
+def detect_image_format(image_bytes: bytes) -> str | None:
+    stripped = image_bytes[:512].lstrip().lower()
+    if stripped.startswith((b"<svg", b"<?xml", b"<!doctype html", b"<html")):
+        return None
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if image_bytes.startswith(b"\xff\xd8"):
+        return "jpeg"
+    if image_bytes.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if image_bytes.startswith(b"RIFF") and len(image_bytes) >= 12 and image_bytes[8:12] == b"WEBP":
+        return "webp"
+    if image_bytes.startswith(b"BM"):
+        return "bmp"
+    if image_bytes.startswith((b"II*\x00", b"MM\x00*")):
+        return "tiff"
+    if len(image_bytes) >= 12 and image_bytes[4:8] == b"ftyp":
+        brand = image_bytes[8:12]
+        compatible = image_bytes[8:32]
+        if brand in {b"avif", b"avis"} or b"avif" in compatible or b"avis" in compatible:
+            return "avif"
+        if brand in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}:
+            return "heif"
+    if image_bytes.startswith(b"\x00\x00\x01\x00"):
+        return "ico"
+    return None
+
+
+def validate_image_bytes(
+    image_bytes: bytes,
+    *,
+    filename: str = "",
+    content_type: str = "",
+) -> str:
+    detected_format = detect_image_format(image_bytes)
+    if not detected_format:
+        raise ValueError("Image data must be a supported raster image format")
+
+    suffix = Path(filename or "").suffix.lower()
+    extension_format = IMAGE_EXTENSION_FORMATS.get(suffix)
+    if suffix and extension_format != detected_format:
+        raise ValueError("Image file extension does not match image data")
+
+    normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
+    content_type_format = IMAGE_CONTENT_TYPE_FORMATS.get(normalized_content_type)
+    if normalized_content_type and content_type_format != detected_format:
+        raise ValueError("Image content type does not match image data")
+
+    return detected_format
+
+
 def get_image_dimensions(image_bytes: bytes) -> tuple[int, int] | None:
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n") and len(image_bytes) >= 24:
         return struct.unpack(">II", image_bytes[16:24])
@@ -714,6 +806,15 @@ def _image_dimension_metadata(image_bytes: bytes) -> dict[str, int]:
 
 
 def _safe_image_path(filename: str) -> Path | None:
+    if not filename or "\x00" in filename or "/" in filename or "\\" in filename:
+        return None
+    if filename in {".", ".."}:
+        return None
+
+    path_name = Path(filename)
+    if path_name.name != filename or path_name.suffix.lower() not in IMAGE_FILE_EXTENSIONS:
+        return None
+
     images_dir = Path(config.IMAGES_DIR).resolve()
     path = (images_dir / filename).resolve()
     try:
@@ -723,8 +824,13 @@ def _safe_image_path(filename: str) -> Path | None:
     return path
 
 
+def get_safe_image_path(filename: str) -> Path | None:
+    return _safe_image_path(filename)
+
+
 def _save_image_unlocked(image_bytes: bytes, filename: str) -> Path:
     _ensure_directories()
+    validate_image_bytes(image_bytes, filename=filename)
     path = _safe_image_path(filename)
     if not path:
         raise ValueError(f"Invalid image filename: {filename}")
@@ -751,7 +857,10 @@ def save_image(image_bytes: bytes, filename: str) -> Path:
 
 
 def get_image_path(filename: str) -> Path:
-    return Path(config.IMAGES_DIR) / filename
+    path = get_safe_image_path(filename)
+    if not path:
+        raise ValueError(f"Invalid image filename: {filename}")
+    return path
 
 
 def delete_image(filename: str) -> bool:
@@ -893,8 +1002,11 @@ async def batch_save_and_update_gallery(
 
 
 def _stat_image_bytes(filename: str) -> int | None:
+    path = get_safe_image_path(filename)
+    if not path:
+        return None
     try:
-        return get_image_path(filename).stat().st_size
+        return path.stat().st_size
     except OSError:
         return None
 

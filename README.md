@@ -313,11 +313,11 @@ The panel supports these upstream paths:
 
 ## Import and upload limits
 
-- uploaded source images are limited by `MAX_FILE_SIZE_MB`
+- uploaded source images are limited by `MAX_FILE_SIZE_MB` and must be supported raster formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.avif`, `.bmp`, `.heic`, `.heif`, `.ico`, `.tif`, `.tiff`); SVG is rejected
 - `/api/import` accepts ZIP archives created by `/api/download-all`
 - import archives must include `metadata.json`
 - import archives are validated for uploaded size, file count, total uncompressed size, metadata size, member-path safety, and compression ratio
-- import only processes supported image file extensions referenced by `metadata.json`, and rejects unsafe paths such as absolute paths, `..` traversal, and backslash-based path variants
+- imported image entries must pass file extension and magic-byte validation before they are stored
 
 ## Environment variables
 
@@ -389,8 +389,9 @@ The panel supports these upstream paths:
 - Version comparison ignores a leading `v`, compares numeric version segments, and does not block app startup or usage.
 - If the remote version check fails, the UI keeps showing the current version and continues normally.
 - API presets are persisted to the SQLite database configured by `DATABASE_FILE`.
-- Generation and edit job history is persisted to SQLite with status, stage, error, timing, request parameters, and result metadata.
+- Generation and edit job history is persisted to SQLite for queued, running-start, and terminal states; intermediate running progress remains live over SSE and is throttled before SQLite persistence.
 - `/api/generate`, `/api/edits`, and `/api/edits/from-gallery/{image_id}` accept optional `webhook_url`; callback delivery uses async retries and request signing when `WEBHOOK_SIGNING_SECRET` is configured.
+- Image URLs returned by upstream APIs are downloaded without automatic redirect following; redirect targets and final peer IPs are revalidated, and downloads are bounded by `MAX_FILE_SIZE_MB` while streaming.
 - Generation and edit jobs share one queue; concurrency is limited by `MAX_ACTIVE_GENERATE_JOBS`, queued capacity is limited by `MAX_QUEUED_GENERATE_JOBS`, and overflow requests return `429`.
 - If the database has no presets, the default preset is initialized from `DEFAULT_API_URL`, `DEFAULT_API_KEY`, and `DEFAULT_API_PATH`.
 - API keys are masked in the UI but stored as plain text in SQLite.
@@ -759,11 +760,11 @@ curl http://localhost:9090/health
 
 ## 导入与上传限制
 
-- 上传作为编辑源图的图片大小受 `MAX_FILE_SIZE_MB` 限制
+- 上传作为编辑源图的图片大小受 `MAX_FILE_SIZE_MB` 限制，且必须是受支持的位图格式（`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.avif`、`.bmp`、`.heic`、`.heif`、`.ico`、`.tif`、`.tiff`）；SVG 会被拒绝
 - `/api/import` 只接受由 `/api/download-all` 导出的 ZIP 归档
 - 导入 ZIP 必须包含 `metadata.json`
 - 导入 ZIP 会校验上传体积、文件数、解压总体积、metadata 大小、安全路径和压缩比
-- 导入时只处理 `metadata.json` 中引用且扩展名受支持的图片文件，并拒绝绝对路径、`..` 路径穿越和带反斜杠的危险路径变体
+- 导入图片条目在存储前必须通过扩展名和文件魔数校验
 
 ## 环境变量
 
@@ -834,8 +835,9 @@ curl http://localhost:9090/health
 - 前端页面加载时会请求 `https://raw.githubusercontent.com/{GITHUB_REPO}/main/VERSION`，当远端版本高于当前版本时在头部版本 badge 上显示 `New`。
 - 版本比较会忽略开头的 `v`，按数字版本段比较；远端检查失败不会阻塞启动或使用。
 - API 预设持久化保存在 `DATABASE_FILE` 指向的 SQLite 数据库。
-- 生成/编辑任务历史持久化保存在 SQLite，包含状态、阶段、错误、耗时、请求参数和结果元数据。
+- 生成/编辑任务历史会把 queued、running 起始和终态持久化到 SQLite；中间 running 进度仍通过 SSE 实时推送，并在写入 SQLite 前节流。
 - `/api/generate`、`/api/edits` 和 `/api/edits/from-gallery/{image_id}` 接受可选 `webhook_url`；回调使用异步重试，配置 `WEBHOOK_SIGNING_SECRET` 时会签名请求。
+- 上游返回的图片 URL 下载不会自动跟随重定向；重定向目标和最终 peer IP 会重新校验，下载流式读取且受 `MAX_FILE_SIZE_MB` 限制。
 - 生成和编辑任务共享同一个队列；并发数受 `MAX_ACTIVE_GENERATE_JOBS` 限制，排队容量受 `MAX_QUEUED_GENERATE_JOBS` 限制，超出时请求返回 `429`。
 - 如果数据库中没有 preset，默认预设会使用 `DEFAULT_API_URL`、`DEFAULT_API_KEY` 和 `DEFAULT_API_PATH` 初始化。
 - API Key 在界面中掩码展示，但会以明文保存到 SQLite。

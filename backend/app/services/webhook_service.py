@@ -92,7 +92,13 @@ async def deliver_webhook(webhook_url: str, job: dict[str, Any]):
     for attempt in range(1, attempts + 1):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(webhook_url, data=body, headers=headers) as response:
+                async with session.post(
+                    webhook_url,
+                    data=body,
+                    headers=headers,
+                    allow_redirects=False,
+                ) as response:
+                    ssrf.validate_response_peer_ip(response, "Webhook")
                     await response.read()
                     if 200 <= response.status < 300:
                         logger.info(
