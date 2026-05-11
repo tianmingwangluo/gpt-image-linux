@@ -72,6 +72,8 @@ export type GalleryEntry = {
   prompt: string;
   size: string;
   filename: string;
+  thumbnail_filename?: string | null;
+  thumbnail_url?: string | null;
   created_at: string;
   image_width?: number | null;
   image_height?: number | null;
@@ -108,4 +110,3 @@ export type MessageResponse = {
   status: string;
   message: string;
 };
-

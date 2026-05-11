@@ -4,6 +4,10 @@ export function imageUrl(filename: string) {
   return `/api/image/${encodeURIComponent(filename)}`;
 }
 
+export function thumbnailUrl(filename: string, url?: string | null) {
+  return url || `/api/thumb/${encodeURIComponent(filename)}`;
+}
+
 export function downloadUrl(filename: string) {
   return `/api/download/${encodeURIComponent(filename)}`;
 }

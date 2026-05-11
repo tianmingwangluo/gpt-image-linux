@@ -110,6 +110,7 @@ async def lifespan(app: FastAPI):
         )
 
     Path(config.IMAGES_DIR).mkdir(parents=True, exist_ok=True)
+    Path(config.THUMBNAILS_DIR).mkdir(parents=True, exist_ok=True)
     Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
     storage.verify_storage_writable()
     interrupted_jobs = storage.mark_active_generate_jobs_interrupted()
@@ -460,7 +461,7 @@ def build_gallery_export_metadata(entries: list) -> dict:
     exported_at = datetime.now(timezone.utc).isoformat()
     images = []
     for entry in entries:
-        data = entry.model_dump()
+        data = entry.model_dump(exclude={"thumbnail_filename", "thumbnail_url"})
         path = storage.get_safe_image_path(entry.filename)
         if not path:
             data["bytes"] = None
@@ -1849,6 +1850,26 @@ async def _image_file_response(filename: str, *, download: bool = False):
 @app.get("/api/image/{filename}")
 async def serve_image(filename: str):
     return await _image_file_response(filename)
+
+
+@app.get("/api/thumb/{filename}")
+async def serve_thumbnail(filename: str):
+    thumbnail_filename = await asyncio.to_thread(
+        storage.ensure_thumbnail_for_image,
+        filename,
+    )
+    if not thumbnail_filename:
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    path = storage.get_safe_thumbnail_path(thumbnail_filename)
+    if not path or not path.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    return FileResponse(
+        path,
+        media_type=storage.THUMBNAIL_CONTENT_TYPE,
+        headers={"Cache-Control": "public, max-age=31536000"},
+    )
 
 
 @app.get("/api/download/{filename}")

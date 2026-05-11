@@ -59,6 +59,8 @@ def _configure_runtime(tmp_path: Path, *, access_key: str = "", allow_unauthenti
     config.IMPORT_MAX_COMPRESSION_RATIO = 100
     config.MAX_ACTIVE_GENERATE_JOBS = 2
     config.MAX_QUEUED_GENERATE_JOBS = 20
+    config.THUMBNAILS_DIR = str(images_dir / "thumbs")
+    config.THUMBNAIL_MAX_SIDE = 512
 
     storage._db_initialized = False
     backend_main.app.state._state.clear()
@@ -496,16 +498,24 @@ def test_edit_upload_and_gallery_flow(client):
 def test_gallery_image_download_and_zip(client):
     entry = _fake_gallery_entry("gallery-zip", "zip me", "1024x1024", "gallery-zip.png")
     assert entry.bytes == len(PNG_BYTES)
+    assert entry.thumbnail_filename
+    assert entry.thumbnail_url == "/api/thumb/gallery-zip.png"
 
     gallery = client.get("/api/gallery")
     assert gallery.status_code == 200
     gallery_data = gallery.json()
     assert gallery_data["images"][0]["bytes"] == len(PNG_BYTES)
+    assert gallery_data["images"][0]["thumbnail_url"] == "/api/thumb/gallery-zip.png"
     assert gallery_data["total_bytes"] == len(PNG_BYTES)
 
     image = client.get("/api/image/gallery-zip.png")
     assert image.status_code == 200
     assert image.headers["cache-control"].startswith("public")
+
+    thumb = client.get("/api/thumb/gallery-zip.png")
+    assert thumb.status_code == 200
+    assert thumb.headers["content-type"].startswith("image/webp")
+    assert thumb.headers["cache-control"].startswith("public")
 
     download = client.get("/api/download/gallery-zip.png")
     assert download.status_code == 200
@@ -518,6 +528,8 @@ def test_gallery_image_download_and_zip(client):
         assert "images/gallery-zip.png" in zf.namelist()
         metadata = json.loads(zf.read("metadata.json"))
         assert metadata["images"]
+        assert "thumbnail_filename" not in metadata["images"][0]
+        assert "thumbnail_url" not in metadata["images"][0]
 
 
 def test_import_archive(client):
@@ -529,6 +541,21 @@ def test_import_archive(client):
     imported = storage.get_gallery_entry("import-1")
     assert imported is not None
     assert imported.bytes == len(PNG_BYTES)
+    assert imported.thumbnail_filename
+    assert imported.thumbnail_url == "/api/thumb/import-1.png"
+
+
+def test_thumbnail_endpoint_lazily_rebuilds_missing_file(client):
+    entry = _fake_gallery_entry("lazy-thumb", "lazy", "1024x1024", "lazy-thumb.png")
+    assert entry.thumbnail_filename
+    thumbnail_path = storage.get_safe_thumbnail_path(entry.thumbnail_filename)
+    assert thumbnail_path is not None
+    thumbnail_path.unlink()
+
+    resp = client.get("/api/thumb/lazy-thumb.png")
+
+    assert resp.status_code == 200
+    assert thumbnail_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -677,9 +704,11 @@ def test_safe_image_paths_reject_traversal(client):
     assert storage.get_safe_image_path("nested/secret.png") is None
 
     image = client.get("/api/image/..%2Fsecret.png")
+    thumb = client.get("/api/thumb/..%2Fsecret.png")
     download = client.get("/api/download/..%2Fsecret.png")
 
     assert image.status_code == 404
+    assert thumb.status_code == 404
     assert download.status_code == 404
 
 

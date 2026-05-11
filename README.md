@@ -342,6 +342,8 @@ The panel supports these upstream paths:
 | `MAX_ACTIVE_GENERATE_JOBS` | `2` | Max number of generation and edit jobs running concurrently |
 | `MAX_QUEUED_GENERATE_JOBS` | `20` | Max additional queued generation and edit jobs before new requests are rejected with `429` |
 | `IMAGES_DIR` | `./images` | Directory for saved images |
+| `THUMBNAILS_DIR` | `./images/thumbs` | Directory for generated gallery thumbnails |
+| `THUMBNAIL_MAX_SIDE` | `512` | Max thumbnail width/height in pixels |
 | `DATA_DIR` | `./data` | Directory for SQLite runtime data |
 | `DATABASE_FILE` | `./data/app.sqlite3` | SQLite database for gallery metadata and API presets |
 | `PYTHON_BASE_IMAGE` | `python:3.11-slim` | Docker build base image; override when Docker Hub is slow or blocked |
@@ -376,6 +378,7 @@ The panel supports these upstream paths:
 | `GET` | `/api/gallery` | List gallery images with pagination and optional `prompt`, `model`, `preset`, `size`, `date_from`, `date_to`, and `favorite` filters |
 | `PATCH` | `/api/gallery/{id}/favorite` | Set or clear a gallery favorite flag |
 | `GET` | `/api/image/{filename}` | Serve image file |
+| `GET` | `/api/thumb/{filename}` | Serve or lazily create a WebP gallery thumbnail |
 | `GET` | `/api/download/{filename}` | Download image as attachment |
 | `DELETE` | `/api/gallery/{id}` | Delete gallery entry and its server image file |
 | `GET` | `/api/download-all` | Download all gallery images plus `metadata.json` as a ZIP file |
@@ -399,6 +402,7 @@ The panel supports these upstream paths:
 - `/api/import` only accepts valid ZIP archives with safe paths and required `metadata.json`, and enforces archive/file-size, file-count, metadata-size, and compression-ratio limits during validation.
 - `/api/download-all` builds export ZIP files on disk in a worker thread and removes the temporary file after the response completes, so large galleries do not need to be fully buffered in memory.
 - Gallery image byte sizes are stored with each entry; `/api/gallery` uses this metadata for total-size calculations and backfills older rows from file stats when needed.
+- Gallery saves generate WebP thumbnails under `THUMBNAILS_DIR`; `/api/gallery` returns `thumbnail_url`, and `/api/thumb/{filename}` lazily rebuilds missing thumbnails for older images.
 - Uploaded edit source images must be supported raster image formats; SVG uploads are rejected.
 - On startup, the backend scans `IMAGES_DIR` and removes gallery metadata entries whose image files are missing.
 - On startup, queued/running jobs persisted by a previous process are marked as interrupted because their task handles cannot survive restart.
@@ -789,6 +793,8 @@ curl http://localhost:9090/health
 | `MAX_ACTIVE_GENERATE_JOBS` | `2` | 生成和编辑任务允许同时运行的最大数量 |
 | `MAX_QUEUED_GENERATE_JOBS` | `20` | 超出并发后允许继续排队的最大任务数；超过后新请求返回 `429` |
 | `IMAGES_DIR` | `./images` | 图片存储目录 |
+| `THUMBNAILS_DIR` | `./images/thumbs` | Gallery 缩略图生成目录 |
+| `THUMBNAIL_MAX_SIDE` | `512` | 缩略图最大宽/高像素 |
 | `DATA_DIR` | `./data` | SQLite 运行时数据目录 |
 | `DATABASE_FILE` | `./data/app.sqlite3` | 保存 Gallery 元数据和 API 预设的 SQLite 数据库 |
 | `PYTHON_BASE_IMAGE` | `python:3.11-slim` | Docker 构建基础镜像；Docker Hub 慢或不可访问时可覆盖 |
@@ -823,6 +829,7 @@ curl http://localhost:9090/health
 | `GET` | `/api/gallery` | 分页查询 Gallery 图片，可选 `prompt`、`model`、`preset`、`size`、`date_from`、`date_to`、`favorite` 筛选 |
 | `PATCH` | `/api/gallery/{id}/favorite` | 设置或取消 Gallery 收藏标记 |
 | `GET` | `/api/image/{filename}` | 访问图片文件 |
+| `GET` | `/api/thumb/{filename}` | 访问或懒生成 WebP Gallery 缩略图 |
 | `GET` | `/api/download/{filename}` | 下载图片 |
 | `DELETE` | `/api/gallery/{id}` | 删除 Gallery 条目和对应服务器图片文件 |
 | `GET` | `/api/download-all` | 下载 Gallery 所有图片和 `metadata.json` 为 ZIP 文件 |
@@ -845,6 +852,7 @@ curl http://localhost:9090/health
 - `/api/import` 只接受带安全路径且包含 `metadata.json` 的有效 ZIP，并会校验归档/文件体积、文件数量、metadata 大小和压缩比。
 - `/api/download-all` 会在线程中构建磁盘临时 ZIP，并在响应结束后删除临时文件，大 Gallery 导出时无需把完整 ZIP 缓存在内存中。
 - Gallery 图片字节数会随条目持久化保存；`/api/gallery` 使用该元数据计算总大小，并在旧数据缺失时从文件 stat 回填。
+- Gallery 保存图片时会在 `THUMBNAILS_DIR` 下生成 WebP 缩略图；`/api/gallery` 返回 `thumbnail_url`，`/api/thumb/{filename}` 会为旧图片懒生成缺失缩略图。
 - 上传作为编辑源图的文件必须是受支持的位图图片格式；SVG 上传会被拒绝。
 - 启动时后端会扫描 `IMAGES_DIR`，并移除图片文件已不存在的 Gallery 元数据条目。
 - 启动时，上个进程遗留的排队/运行任务会被标记为 interrupted，因为 `asyncio.Task` 句柄无法跨进程恢复。

@@ -2,7 +2,7 @@
   import type { GalleryEntry, GalleryResponse } from '$lib/api/types';
   import { t } from '$lib/i18n';
   import type { GalleryFilters } from '$lib/stores/gallery';
-  import { formatBytes, imageUrl } from '$lib/utils/format';
+  import { formatBytes, thumbnailUrl } from '$lib/utils/format';
 
   export let gallery: GalleryResponse | null = null;
   export let filters: GalleryFilters;
@@ -113,7 +113,7 @@
       {#each images as image}
         <article class="gallery-card overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/45">
           <button type="button" class="block aspect-square w-full bg-zinc-950" on:click={() => onOpen(image)}>
-            <img src={imageUrl(image.filename)} alt={image.prompt} class="h-full w-full object-cover" loading="lazy" />
+            <img src={thumbnailUrl(image.filename, image.thumbnail_url)} alt={image.prompt} class="h-full w-full object-cover" loading="lazy" />
           </button>
           <div class="space-y-3 p-3">
             <div class="min-w-0">

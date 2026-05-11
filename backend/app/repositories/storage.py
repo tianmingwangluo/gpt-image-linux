@@ -1,5 +1,8 @@
 import asyncio
+import hashlib
+import io
 import json
+import logging
 import os
 import sqlite3
 import struct
@@ -9,9 +12,19 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import quote
 
 from ..core import settings as config
 from ..schemas.models import GalleryEntry
+
+try:
+    from PIL import Image, ImageOps, UnidentifiedImageError
+except ImportError:  # pragma: no cover - exercised only in incomplete installs
+    Image = None
+    ImageOps = None
+    UnidentifiedImageError = OSError
+
+logger = logging.getLogger(__name__)
 
 IMAGE_FILE_EXTENSIONS = {
     ".avif",
@@ -69,12 +82,15 @@ IMAGE_FORMAT_CONTENT_TYPES = {
     "tiff": "image/tiff",
     "webp": "image/webp",
 }
+THUMBNAIL_EXTENSION = ".webp"
+THUMBNAIL_CONTENT_TYPE = "image/webp"
 
 GALLERY_COLUMNS = (
     "id",
     "prompt",
     "size",
     "filename",
+    "thumbnail_filename",
     "created_at",
     "image_width",
     "image_height",
@@ -164,6 +180,7 @@ def _utc_now() -> str:
 
 def _ensure_directories():
     Path(config.IMAGES_DIR).mkdir(parents=True, exist_ok=True)
+    Path(config.THUMBNAILS_DIR).mkdir(parents=True, exist_ok=True)
     Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
     Path(config.DATABASE_FILE).parent.mkdir(parents=True, exist_ok=True)
 
@@ -187,6 +204,7 @@ def _check_directory_writable(path: Path):
 def verify_storage_writable():
     _ensure_directories()
     _check_directory_writable(Path(config.IMAGES_DIR))
+    _check_directory_writable(Path(config.THUMBNAILS_DIR))
     _check_directory_writable(Path(config.DATA_DIR))
     _ensure_database()
 
@@ -247,6 +265,7 @@ def _ensure_database():
                     prompt TEXT NOT NULL,
                     size TEXT NOT NULL,
                     filename TEXT NOT NULL,
+                    thumbnail_filename TEXT,
                     created_at TEXT NOT NULL,
                     image_width INTEGER,
                     image_height INTEGER,
@@ -322,6 +341,8 @@ def _migrate_gallery_schema(conn: sqlite3.Connection):
         )
     if "bytes" not in columns:
         conn.execute("ALTER TABLE gallery_entries ADD COLUMN bytes INTEGER")
+    if "thumbnail_filename" not in columns:
+        conn.execute("ALTER TABLE gallery_entries ADD COLUMN thumbnail_filename TEXT")
     if "favorite" in _table_columns(conn, "gallery_entries"):
         conn.execute(
             """
@@ -509,6 +530,10 @@ def _normalize_gallery_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
                 normalized[column] = int(value)
             except (TypeError, ValueError):
                 continue
+        elif column == "thumbnail_filename":
+            thumbnail_filename = str(value)
+            if _safe_thumbnail_path(thumbnail_filename):
+                normalized[column] = thumbnail_filename
         else:
             normalized[column] = str(value)
 
@@ -535,7 +560,11 @@ def _gallery_entry_from_row(row: sqlite3.Row) -> dict[str, Any]:
         if column in REQUIRED_GALLERY_COLUMNS or row[column] is not None
     }
     entry["favorite"] = bool(entry.get("favorite"))
-    return entry
+    if entry.get("thumbnail_filename") and not _safe_thumbnail_path(
+        str(entry["thumbnail_filename"])
+    ):
+        entry.pop("thumbnail_filename", None)
+    return _attach_gallery_thumbnail_url(entry)
 
 
 def _build_gallery_filter_where(filters: dict[str, Any] | None) -> tuple[str, list[Any]]:
@@ -805,6 +834,31 @@ def _image_dimension_metadata(image_bytes: bytes) -> dict[str, int]:
     return {"image_width": width, "image_height": height}
 
 
+def _thumbnail_filename_for_image(filename: str) -> str | None:
+    path_name = Path(filename or "")
+    if (
+        not filename
+        or "\x00" in filename
+        or "/" in filename
+        or "\\" in filename
+        or path_name.name != filename
+        or path_name.suffix.lower() not in IMAGE_FILE_EXTENSIONS
+    ):
+        return None
+
+    safe_stem = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "_"
+        for char in path_name.stem
+    ).strip("._")
+    safe_stem = (safe_stem or "image")[:80]
+    digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:12]
+    return f"{safe_stem}-{digest}{THUMBNAIL_EXTENSION}"
+
+
+def get_thumbnail_filename(filename: str) -> str | None:
+    return _thumbnail_filename_for_image(filename)
+
+
 def _safe_image_path(filename: str) -> Path | None:
     if not filename or "\x00" in filename or "/" in filename or "\\" in filename:
         return None
@@ -826,6 +880,147 @@ def _safe_image_path(filename: str) -> Path | None:
 
 def get_safe_image_path(filename: str) -> Path | None:
     return _safe_image_path(filename)
+
+
+def _safe_thumbnail_path(filename: str) -> Path | None:
+    if not filename or "\x00" in filename or "/" in filename or "\\" in filename:
+        return None
+    if filename in {".", ".."}:
+        return None
+
+    path_name = Path(filename)
+    if path_name.name != filename or path_name.suffix.lower() != THUMBNAIL_EXTENSION:
+        return None
+
+    thumbnails_dir = Path(config.THUMBNAILS_DIR).resolve()
+    path = (thumbnails_dir / filename).resolve()
+    try:
+        path.relative_to(thumbnails_dir)
+    except ValueError:
+        return None
+    return path
+
+
+def get_safe_thumbnail_path(filename: str) -> Path | None:
+    return _safe_thumbnail_path(filename)
+
+
+def _thumbnail_url_for_filename(filename: str) -> str | None:
+    if not _safe_image_path(filename):
+        return None
+    if not _thumbnail_filename_for_image(filename):
+        return None
+    return f"/api/thumb/{quote(filename, safe='')}"
+
+
+def _attach_gallery_thumbnail_url(entry: dict[str, Any]) -> dict[str, Any]:
+    if "thumbnail_url" not in entry:
+        entry["thumbnail_url"] = _thumbnail_url_for_filename(
+            str(entry.get("filename") or "")
+        )
+    return entry
+
+
+def _get_thumbnail_resampling_filter():
+    if Image is None:
+        return None
+    return getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+
+
+def _create_thumbnail_unlocked(image_bytes: bytes, filename: str) -> str | None:
+    if Image is None or ImageOps is None:
+        logger.warning("Pillow is not installed; thumbnail generation skipped")
+        return None
+
+    thumbnail_filename = _thumbnail_filename_for_image(filename)
+    if not thumbnail_filename:
+        return None
+
+    thumbnail_path = _safe_thumbnail_path(thumbnail_filename)
+    if not thumbnail_path:
+        return None
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            if getattr(image, "is_animated", False):
+                image.seek(0)
+            thumbnail = ImageOps.exif_transpose(image)
+            if thumbnail.mode not in {"RGB", "RGBA"}:
+                thumbnail = thumbnail.convert(
+                    "RGBA" if "A" in thumbnail.getbands() else "RGB"
+                )
+            thumbnail.thumbnail(
+                (config.THUMBNAIL_MAX_SIDE, config.THUMBNAIL_MAX_SIDE),
+                _get_thumbnail_resampling_filter(),
+            )
+            thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+            thumbnail.save(thumbnail_path, "WEBP", quality=82, method=6)
+    except (OSError, UnidentifiedImageError, ValueError) as e:
+        thumbnail_path.unlink(missing_ok=True)
+        logger.warning("Failed to generate thumbnail for %s: %s", filename, e)
+        return None
+
+    return thumbnail_filename
+
+
+def ensure_thumbnail_for_image(filename: str) -> str | None:
+    thumbnail_filename = _thumbnail_filename_for_image(filename)
+    if not thumbnail_filename:
+        return None
+
+    thumbnail_path = _safe_thumbnail_path(thumbnail_filename)
+    if thumbnail_path and thumbnail_path.is_file():
+        return thumbnail_filename
+
+    image_path = _safe_image_path(filename)
+    if not image_path or not image_path.is_file():
+        return None
+
+    with _storage_lock:
+        if thumbnail_path and thumbnail_path.is_file():
+            return thumbnail_filename
+        try:
+            image_bytes = image_path.read_bytes()
+        except OSError as e:
+            logger.warning("Failed to read image for thumbnail %s: %s", filename, e)
+            return None
+
+        created_thumbnail = _create_thumbnail_unlocked(image_bytes, filename)
+        if created_thumbnail:
+            _set_thumbnail_filename_for_image(filename, created_thumbnail)
+        return created_thumbnail
+
+
+def _set_thumbnail_filename_for_image(filename: str, thumbnail_filename: str):
+    _ensure_database()
+    with _connect() as conn:
+        with _transaction(conn):
+            conn.execute(
+                """
+                UPDATE gallery_entries
+                SET thumbnail_filename = ?
+                WHERE filename = ?
+                """,
+                (thumbnail_filename, filename),
+            )
+
+
+def _delete_thumbnail_unlocked(filename: str):
+    thumbnail_filename = _thumbnail_filename_for_image(filename)
+    if not thumbnail_filename:
+        return
+    thumbnail_path = _safe_thumbnail_path(thumbnail_filename)
+    if thumbnail_path and thumbnail_path.is_file():
+        thumbnail_path.unlink()
+
+
+def _delete_all_thumbnails_unlocked():
+    thumbnails_dir = Path(config.THUMBNAILS_DIR)
+    if not thumbnails_dir.exists():
+        return
+    for path in thumbnails_dir.iterdir():
+        if path.is_file() and path.suffix.lower() == THUMBNAIL_EXTENSION:
+            path.unlink()
 
 
 def _save_image_unlocked(image_bytes: bytes, filename: str) -> Path:
@@ -920,8 +1115,14 @@ def _save_images_and_insert_gallery_entries(
     with _storage_lock:
         with _connect() as conn:
             with _transaction(conn):
-                for image_bytes, filename in entries_data:
+                for index, (image_bytes, filename) in enumerate(entries_data):
                     _save_image_unlocked(image_bytes, filename)
+                    thumbnail_filename = _create_thumbnail_unlocked(
+                        image_bytes,
+                        filename,
+                    )
+                    if thumbnail_filename and index < len(gallery_entries):
+                        gallery_entries[index]["thumbnail_filename"] = thumbnail_filename
                 _insert_gallery_entries_on_conn(conn, gallery_entries)
 
 
@@ -941,7 +1142,14 @@ def import_gallery_entries(
                     if not normalized:
                         continue
                     normalized["bytes"] = len(image_bytes)
+                    normalized.pop("thumbnail_filename", None)
                     _save_image_unlocked(image_bytes, normalized["filename"])
+                    thumbnail_filename = _create_thumbnail_unlocked(
+                        image_bytes,
+                        normalized["filename"],
+                    )
+                    if thumbnail_filename:
+                        normalized["thumbnail_filename"] = thumbnail_filename
                     _insert_gallery_entries_on_conn(conn, [normalized])
                     imported_count += 1
                 return imported_count
@@ -968,7 +1176,7 @@ async def add_to_gallery_async(
         [(image_bytes, filename)],
         [entry],
     )
-    return GalleryEntry(**entry)
+    return GalleryEntry(**_attach_gallery_thumbnail_url(entry))
 
 
 async def batch_save_and_update_gallery(
@@ -998,7 +1206,7 @@ async def batch_save_and_update_gallery(
         image_entries,
         entries_created,
     )
-    return [GalleryEntry(**entry) for entry in entries_created]
+    return [GalleryEntry(**_attach_gallery_thumbnail_url(entry)) for entry in entries_created]
 
 
 def _stat_image_bytes(filename: str) -> int | None:
@@ -1163,8 +1371,11 @@ def add_to_gallery_sync(
             with _transaction(conn):
                 if image_bytes is not None:
                     _save_image_unlocked(image_bytes, filename)
+                    thumbnail_filename = _create_thumbnail_unlocked(image_bytes, filename)
+                    if thumbnail_filename:
+                        entry["thumbnail_filename"] = thumbnail_filename
                 _insert_gallery_entries_on_conn(conn, [entry])
-    return GalleryEntry(**entry)
+    return GalleryEntry(**_attach_gallery_thumbnail_url(entry))
 
 
 def update_gallery_entry(image_id: str, updates: dict[str, Any]) -> GalleryEntry | None:
@@ -1391,6 +1602,7 @@ def delete_gallery_image(image_id: str) -> tuple[bool, int]:
                 for filename in removed_filenames - remaining_filenames:
                     if _delete_image_unlocked(filename):
                         deleted_count += 1
+                    _delete_thumbnail_unlocked(filename)
 
                 return True, deleted_count
 
@@ -1433,6 +1645,8 @@ def delete_all_gallery_images() -> tuple[int, int]:
                 for filename in filenames_to_delete:
                     if _delete_image_unlocked(filename):
                         deleted_count += 1
+                    _delete_thumbnail_unlocked(filename)
+                _delete_all_thumbnails_unlocked()
 
                 conn.execute("DELETE FROM gallery_entries")
                 return total, deleted_count

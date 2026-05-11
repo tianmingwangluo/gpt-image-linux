@@ -133,6 +133,8 @@ class GalleryEntry(BaseModel):
     prompt: str
     size: str
     filename: str
+    thumbnail_filename: Optional[str] = None
+    thumbnail_url: Optional[str] = None
     created_at: str
     image_width: Optional[int] = None
     image_height: Optional[int] = None
