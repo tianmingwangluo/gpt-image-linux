@@ -142,8 +142,6 @@ docker-compose.yml
 VERSION
 requirements.txt
 package.json
-package-lock.json
-tailwind.config.js
 app/
   __init__.py
   main.py              # compatibility wrapper
@@ -603,8 +601,6 @@ docker-compose.yml
 VERSION
 requirements.txt
 package.json
-package-lock.json
-tailwind.config.js
 app/
   __init__.py
   main.py              # 兼容 wrapper
