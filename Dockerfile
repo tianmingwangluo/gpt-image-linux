@@ -10,10 +10,12 @@ RUN npm run build
 
 FROM ${PYTHON_BASE_IMAGE} AS python-builder
 WORKDIR /app
-COPY backend/requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 FROM ${PYTHON_BASE_IMAGE} AS runtime
+
+LABEL org.opencontainers.image.source="https://github.com/Z1rconium/gpt-image-linux"
 
 RUN groupadd -g 1001 appgroup && \
     useradd -u 1001 -g appgroup -s /bin/bash -m appuser

@@ -23,7 +23,6 @@ Key characteristics:
 - background generation/edit jobs executed with `asyncio.create_task`
 - local image storage under `images/`
 - gallery metadata stored in SQLite at `data/app.sqlite3`
-- legacy `data/gallery.json` and `data/settings.json` are imported once on startup when the database is empty
 - Docker and Docker Compose deployment support with frontend static build baked into the image
 - pytest API contract tests under `backend/tests/`
 
@@ -125,7 +124,6 @@ VERSION
 requirements.txt
 package.json
 backend/
-  requirements.txt
   requirements-dev.txt
   app/
     main.py
@@ -384,7 +382,7 @@ The panel supports these upstream paths:
 ## Runtime behavior notes
 
 - app version comes from `APP_VERSION` then `VERSION`; optional GitHub remote check can show a `New` badge without blocking usage
-- presets and gallery/job data persist in `DATABASE_FILE`; legacy `data/settings.json` and `data/gallery.json` are imported once when DB tables are empty
+- presets and gallery/job data persist only in `DATABASE_FILE`
 - generation and edit share one queue (`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`), support cancellation, and persist terminal history including `completed_at`
 - SSE is the primary progress channel; `/api/generate/jobs` provides list/history (`include_finished=true`), and `/api/generate/jobs/events` streams live job changes
 - upstream image URL downloads are revalidated (SSRF-aware, no blind redirect follow) and bounded by `MAX_FILE_SIZE_MB`
@@ -452,7 +450,6 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 - 生成/编辑任务通过 `asyncio.create_task` 异步执行
 - 图片保存在 `images/`
 - Gallery 元数据保存在 SQLite：`data/app.sqlite3`
-- 旧的 `data/gallery.json` 和 `data/settings.json` 会在数据库为空时于启动阶段导入一次
 - Docker 镜像会构建并内置 SvelteKit 静态前端
 - pytest API 契约测试位于 `backend/tests/`
 
@@ -554,7 +551,6 @@ VERSION
 requirements.txt
 package.json
 backend/
-  requirements.txt
   requirements-dev.txt
   app/
     main.py
@@ -813,7 +809,7 @@ curl http://localhost:9090/health
 ## 运行时注意事项
 
 - 版本读取顺序是 `APP_VERSION` -> `VERSION`；可选 GitHub 远端检查仅用于显示 `New`，不会阻塞使用
-- 预设与 Gallery/Job 数据保存在 `DATABASE_FILE`；旧 `data/settings.json`、`data/gallery.json` 仅在空表时一次性导入
+- 预设与 Gallery/Job 数据只保存在 `DATABASE_FILE`
 - 生成与编辑共用队列（`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`），支持取消，并持久化终态历史（含 `completed_at`）
 - SSE 是主进度通道；`/api/generate/jobs` 提供列表/历史（`include_finished=true`），`/api/generate/jobs/events` 推送实时变化
 - 上游图片 URL 下载会做 SSRF/重定向目标复核，并受 `MAX_FILE_SIZE_MB` 限制

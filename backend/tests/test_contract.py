@@ -12,7 +12,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import main as backend_main
-from backend.app.api import contract_app
 from backend.app.core import settings as config
 from backend.app.repositories import storage
 
@@ -31,8 +30,6 @@ def _configure_runtime(tmp_path: Path, *, access_key: str = "", allow_unauthenti
     config.IMAGES_DIR = str(images_dir)
     config.DATA_DIR = str(data_dir)
     config.DATABASE_FILE = str(data_dir / "app.sqlite3")
-    config.GALLERY_FILE = str(data_dir / "gallery.json")
-    config.SETTINGS_FILE = str(data_dir / "settings.json")
     config.DEFAULT_API_URL = "https://api.example.com"
     config.DEFAULT_API_KEY = "default-key"
     config.DEFAULT_API_PATH = "/v1/images/generations"
@@ -321,7 +318,7 @@ def test_frontend_index_uses_csp_nonce(tmp_path, monkeypatch):
         """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(contract_app, "FRONTEND_BUILD_DIR", build_dir)
+    monkeypatch.setattr(backend_main.app.state, "frontend_build_dir", build_dir, raising=False)
 
     with TestClient(backend_main.app) as client:
         resp = client.get("/")
@@ -366,7 +363,7 @@ def test_frontend_build_assets_are_available_before_access_unlock(tmp_path, monk
     asset_path = build_dir / "_app" / "immutable" / "entry" / "app.js"
     asset_path.parent.mkdir(parents=True)
     asset_path.write_text("console.log('ok');", encoding="utf-8")
-    monkeypatch.setattr(contract_app, "FRONTEND_BUILD_DIR", build_dir)
+    monkeypatch.setattr(backend_main.app.state, "frontend_build_dir", build_dir, raising=False)
 
     with TestClient(backend_main.app) as client:
         asset = client.get("/_app/immutable/entry/app.js")
@@ -1652,4 +1649,3 @@ def test_responses_request_uses_default_responses_model(tmp_path):
     config.DEFAULT_RESPONSES_MODEL = ""
     fallback = upstream_client_module.build_responses_request_data(payload)
     assert fallback["model"] == "gpt-image-2"
-

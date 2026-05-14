@@ -2,11 +2,10 @@
   import type { GenerateJobStatus } from '$lib/api/types';
   import { t } from '$lib/i18n';
   import { formatBeijingTime, operationLabel, stageLabel, statusLabel } from '$lib/utils/format';
+  import { isActiveJobStatus } from '$lib/utils/jobs';
 
   type JobsTab = 'running' | 'history';
   type MaybePromise = void | Promise<void>;
-
-  const ACTIVE_STATUSES = new Set(['queued', 'running']);
 
   export let open = false;
   export let jobs: GenerateJobStatus[] = [];
@@ -38,7 +37,7 @@
   }
 
   function isActiveJob(job: GenerateJobStatus) {
-    return ACTIVE_STATUSES.has(job.status);
+    return isActiveJobStatus(job.status);
   }
 
   function statusClass(job: GenerateJobStatus) {

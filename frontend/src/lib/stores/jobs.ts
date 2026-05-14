@@ -3,10 +3,9 @@ import { apiFetch } from '$lib/api/client';
 import { openJsonEventSource } from '$lib/api/events';
 import { t } from '$lib/i18n';
 import { filenameFromImageUrl } from '$lib/utils/format';
+import { isActiveJobStatus } from '$lib/utils/jobs';
 import type { GenerateJobResponse, GenerateJobStatus } from '$lib/api/types';
 import type { PreviewState } from '$lib/stores/preview';
-
-const ACTIVE_STATUSES = new Set(['queued', 'running']);
 
 export type JobsState = {
   jobs: GenerateJobStatus[];
@@ -25,7 +24,7 @@ const initialJobsState: JobsState = {
 };
 
 function createJobsStore() {
-  const { subscribe, set, update } = writable<JobsState>(initialJobsState);
+  const { subscribe, update } = writable<JobsState>(initialJobsState);
   let state = initialJobsState;
   let jobsSource: EventSource | null = null;
   let jobsPollingTimer: ReturnType<typeof setInterval> | null = null;
@@ -127,7 +126,7 @@ function createJobsStore() {
     activeJobSource = openJsonEventSource<GenerateJobStatus>(`/api/generate/${encodeURIComponent(jobId)}/events`, {
       onEvent: ({ data }) => {
         void updatePreviewFromJob(data);
-        if (!ACTIVE_STATUSES.has(data.status)) {
+        if (!isActiveJobStatus(data.status)) {
           terminal = true;
           closeActiveJobSource();
         }
@@ -147,7 +146,7 @@ function createJobsStore() {
     try {
       const job = await apiFetch<GenerateJobStatus>(`/api/generate/${encodeURIComponent(jobId)}`, {}, 'loading job');
       await updatePreviewFromJob(job);
-      if (ACTIVE_STATUSES.has(job.status)) {
+      if (isActiveJobStatus(job.status)) {
         setTimeout(() => void pollJob(jobId, updatePreviewFromJob, setPreviewError), 1200);
       }
     } catch (error) {
@@ -176,7 +175,7 @@ function createJobsStore() {
   function previewFromJob(job: GenerateJobStatus, preview: PreviewState): PreviewState {
     const image = job.image_url || '';
     return {
-      loading: ACTIVE_STATUSES.has(job.status),
+      loading: isActiveJobStatus(job.status),
       error: job.status === 'error' ? job.error || job.message || get(t).messages.jobFailed : '',
       job,
       imageUrl: image || preview.imageUrl,
@@ -199,7 +198,6 @@ function createJobsStore() {
 
   return {
     subscribe,
-    set,
     loadJobs,
     loadJobHistory,
     refreshHistoryIfLoaded,

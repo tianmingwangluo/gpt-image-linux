@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import Literal
 
 from fastapi import HTTPException
 
@@ -267,15 +268,18 @@ def build_edit_request_from_form(
         raise HTTPException(status_code=422, detail=str(e)) from e
 
 
-def queue_edit_job(
-    req: EditRequest,
-    image_bytes: bytes,
-    image_filename: str,
-    image_content_type: str,
+def queue_image_job(
+    *,
+    req: GenerateRequest | EditRequest,
+    operation: Literal["generation", "edit"],
+    api_path: str | Callable[[dict], str],
+    queued_message: str,
+    task_factory: Callable[[str, str, str, str, str, str], Awaitable[None]],
 ) -> GenerateJobResponse:
     active_preset = get_active_preset()
     api_url = str(active_preset.get("api_url") or "").rstrip("/")
     api_preset_name = active_preset.get("name") or "Untitled preset"
+    resolved_api_path = api_path(active_preset) if callable(api_path) else api_path
 
     if not api_url:
         raise HTTPException(
@@ -293,24 +297,21 @@ def queue_edit_job(
     pending_job = build_pending_job(
         job_id=job_id,
         req=req,
-        operation="edit",
-        message="Queued image edit",
-        api_path="/v1/images/edits",
+        operation=operation,
+        message=queued_message,
+        api_path=resolved_api_path,
         api_preset_name=api_preset_name,
     )
     store_generate_job(job_id, pending_job)
     track_generate_job_task(
         job_id,
         asyncio.create_task(
-            run_edit_job(
+            task_factory(
                 job_id,
                 api_url,
                 api_key,
+                resolved_api_path,
                 api_preset_name,
-                req,
-                image_bytes,
-                image_filename,
-                image_content_type,
                 socks5_proxy,
             )
         ),
@@ -320,9 +321,46 @@ def queue_edit_job(
         job_id=job_id,
         status="queued",
         stage="queued",
-        message="Queued image edit",
-        operation="edit",
+        message=queued_message,
+        operation=operation,
     )
+
+
+def queue_edit_job(
+    req: EditRequest,
+    image_bytes: bytes,
+    image_filename: str,
+    image_content_type: str,
+) -> GenerateJobResponse:
+    def start_edit_job(
+        job_id: str,
+        api_url: str,
+        api_key: str,
+        _api_path: str,
+        api_preset_name: str,
+        socks5_proxy: str,
+    ) -> Awaitable[None]:
+        return run_edit_job(
+            job_id,
+            api_url,
+            api_key,
+            api_preset_name,
+            req,
+            image_bytes,
+            image_filename,
+            image_content_type,
+            socks5_proxy,
+        )
+
+    return queue_image_job(
+        req=req,
+        operation="edit",
+        api_path="/v1/images/edits",
+        queued_message="Queued image edit",
+        task_factory=start_edit_job,
+    )
+
+
 async def _run_image_job(
     *,
     job_id: str,

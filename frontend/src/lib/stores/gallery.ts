@@ -69,7 +69,7 @@ function isAbortError(error: unknown) {
 }
 
 function createGalleryStore() {
-  const { subscribe, set, update } = writable<GalleryState>(initialGalleryState);
+  const { subscribe, update } = writable<GalleryState>(initialGalleryState);
   let state = initialGalleryState;
   let filterTimer: ReturnType<typeof setTimeout> | null = null;
   let requestSeq = 0;
@@ -256,7 +256,6 @@ function createGalleryStore() {
 
   return {
     subscribe,
-    set,
     loadGallery,
     updateFilter,
     resetFilters,
@@ -276,4 +275,3 @@ function createGalleryStore() {
 }
 
 export const galleryStore = createGalleryStore();
-export const galleryFiltersStore = writable<GalleryFilters>({ ...defaultGalleryFilters });

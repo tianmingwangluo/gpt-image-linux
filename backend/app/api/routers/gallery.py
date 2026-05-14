@@ -71,6 +71,22 @@ def build_gallery_filters(
         "date_to": normalize_gallery_date_filter(date_to, end_of_day=True),
         "favorite": favorite,
     }
+
+
+async def _gallery_zip_response(
+    entries: list[GalleryEntry],
+    filename_prefix: str,
+) -> FileResponse:
+    temp_path = await asyncio.to_thread(build_gallery_zip_file, entries)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return FileResponse(
+        temp_path,
+        media_type="application/zip",
+        filename=f"{filename_prefix}-{timestamp}.zip",
+        background=BackgroundTask(remove_file, temp_path),
+    )
+
+
 @router.get("/api/gallery", response_model=GalleryResponse)
 async def get_gallery_handler(
     page: int = Query(default=1, ge=1),
@@ -133,14 +149,7 @@ async def download_gallery_batch(req: GalleryBatchRequest):
     if not entries:
         raise HTTPException(status_code=404, detail="Gallery entries not found")
 
-    temp_path = await asyncio.to_thread(build_gallery_zip_file, entries)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return FileResponse(
-        temp_path,
-        media_type="application/zip",
-        filename=f"gpt-images-selected-{timestamp}.zip",
-        background=BackgroundTask(remove_file, temp_path),
-    )
+    return await _gallery_zip_response(entries, "gpt-images-selected")
 
 
 @router.patch("/api/gallery/{image_id}/favorite", response_model=GalleryEntry)
@@ -211,14 +220,7 @@ async def download_all_images():
     if not entries:
         raise HTTPException(status_code=404, detail="No images in gallery")
 
-    temp_path = await asyncio.to_thread(build_gallery_zip_file, entries)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return FileResponse(
-        temp_path,
-        media_type="application/zip",
-        filename=f"gpt-images-{timestamp}.zip",
-        background=BackgroundTask(remove_file, temp_path),
-    )
+    return await _gallery_zip_response(entries, "gpt-images")
 
 
 @router.post("/api/import")

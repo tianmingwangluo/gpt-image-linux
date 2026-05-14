@@ -19,7 +19,7 @@
   import { galleryStore } from '$lib/stores/gallery';
   import { jobsStore } from '$lib/stores/jobs';
   import { editSourceStore, initialPromptFormState, previewStore, type PromptFormState } from '$lib/stores/preview';
-  import { settingsStore } from '$lib/stores/settings';
+  import { responsesMode, settingsStore } from '$lib/stores/settings';
   import { uiStore } from '$lib/stores/ui';
   import { copyText, galleryImageSize, imageUrl } from '$lib/utils/format';
   import { compareVersions, normalizeVersion } from '$lib/utils/version';
@@ -34,7 +34,6 @@
   let form: PromptFormState = { ...initialPromptFormState };
   let editPicker: EditSourcePicker;
 
-  $: responsesMode = $settingsStore.settings?.api_path === '/v1/responses';
   $: activeJobsCount = $jobsStore.jobs.length;
 
   async function loadVersion() {
@@ -336,7 +335,7 @@
 
   <PromptForm
     bind:form
-    {responsesMode}
+    responsesMode={$responsesMode}
     loading={$previewStore.loading}
     onGenerate={generateImage}
     onEdit={editImage}

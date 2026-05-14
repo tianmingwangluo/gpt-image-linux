@@ -18,7 +18,7 @@ const initialSettingsState: SettingsState = {
 };
 
 function createSettingsStore() {
-  const { subscribe, set, update } = writable<SettingsState>(initialSettingsState);
+  const { subscribe, update } = writable<SettingsState>(initialSettingsState);
 
   async function loadSettings() {
     const settings = await apiFetch<SettingsResponse>('/api/settings', {}, 'loading settings');
@@ -111,7 +111,6 @@ function createSettingsStore() {
 
   return {
     subscribe,
-    set,
     loadSettings,
     saveSettings,
     createPreset,
@@ -122,5 +121,4 @@ function createSettingsStore() {
 }
 
 export const settingsStore = createSettingsStore();
-export const settingsValue = derived(settingsStore, ($state) => $state.settings);
 export const responsesMode = derived(settingsStore, ($state) => $state.settings?.api_path === '/v1/responses');

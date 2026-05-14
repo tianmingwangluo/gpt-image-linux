@@ -88,14 +88,9 @@ function isImageFile(file: File) {
 
 function createPreviewStore() {
   const { subscribe, set, update } = writable<PreviewState>(initialPreviewState);
-  let state = initialPreviewState;
   let lastRequest: GenerateRequestBody | null = null;
   let lastAction: 'generate' | 'edit' = 'generate';
   let editPreviewObjectUrl = '';
-
-  subscribe((value) => {
-    state = value;
-  });
 
   function setPreview(next: PreviewState) {
     set(next);
@@ -114,18 +109,6 @@ function createPreviewStore() {
     if (!editPreviewObjectUrl) return;
     URL.revokeObjectURL(editPreviewObjectUrl);
     editPreviewObjectUrl = '';
-  }
-
-  function setEditPreview(url: string, label: string, objectUrl = ''): EditSourceState {
-    revokeEditPreviewObjectUrl();
-    editPreviewObjectUrl = objectUrl;
-    return {
-      file: objectUrl ? null : get(editSourceStore).file,
-      selectedGalleryImageId: get(editSourceStore).selectedGalleryImageId,
-      label: get(editSourceStore).label,
-      previewUrl: url,
-      previewLabel: label
-    };
   }
 
   function clearEditSource(input?: HTMLInputElement) {
@@ -257,13 +240,11 @@ function createPreviewStore() {
 
   return {
     subscribe,
-    set,
     setPreview,
     setError,
     clearPreview,
     clearEditSource,
     handleEditFile,
-    setEditPreview,
     generateImage,
     editImage,
     regenerate,

@@ -1,12 +1,11 @@
 import asyncio
-import json
 import logging
 import os
 import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Sequence
 
 from ..core import settings as config
 from ..core.api_paths import normalize_api_preset
@@ -149,8 +148,6 @@ INTEGER_GENERATE_JOB_COLUMNS = {
 }
 SETTINGS_ACTIVE_PRESET_KEY = "active_preset_id"
 UPSTREAM_SOCKS5_PROXY_KEY = "upstream_socks5_proxy"
-LEGACY_SETTINGS_IMPORTED_KEY = "legacy_settings_json_imported"
-LEGACY_GALLERY_IMPORTED_KEY = "legacy_gallery_json_imported"
 SQLITE_TIMEOUT_SECONDS = 30.0
 
 _db_initialized = False
@@ -352,7 +349,6 @@ def _ensure_database():
                 """
             )
             _migrate_gallery_schema(conn)
-            _migrate_legacy_json(conn)
             conn.commit()
 
         _db_initialized = True
@@ -419,21 +415,6 @@ def _set_setting_value(conn: sqlite3.Connection, key: str, value: str):
         """,
         (key, value),
     )
-
-
-def _count_rows(conn: sqlite3.Connection, table: str) -> int:
-    row = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
-    return int(row["count"])
-
-
-def _load_json_file(path: str) -> Any | None:
-    if not Path(path).exists():
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
 
 
 def _normalize_settings(settings: dict | None) -> dict:
@@ -734,22 +715,6 @@ def _insert_gallery_entries_on_conn(
         [_gallery_row_values(entry) for entry in normalized_entries],
     )
     _invalidate_filter_options_cache()
-
-
-def _migrate_legacy_json(conn: sqlite3.Connection):
-    if _get_setting_value(conn, LEGACY_SETTINGS_IMPORTED_KEY) != "1":
-        if _count_rows(conn, "api_presets") == 0:
-            settings_data = _load_json_file(config.SETTINGS_FILE)
-            if isinstance(settings_data, dict):
-                _replace_settings_on_conn(conn, settings_data)
-        _set_setting_value(conn, LEGACY_SETTINGS_IMPORTED_KEY, "1")
-
-    if _get_setting_value(conn, LEGACY_GALLERY_IMPORTED_KEY) != "1":
-        if _count_rows(conn, "gallery_entries") == 0:
-            gallery_data = _load_json_file(config.GALLERY_FILE)
-            if isinstance(gallery_data, list):
-                _insert_gallery_entries_on_conn(conn, gallery_data)
-        _set_setting_value(conn, LEGACY_GALLERY_IMPORTED_KEY, "1")
 
 
 def load_settings() -> dict:
@@ -1312,49 +1277,61 @@ def sync_gallery_with_image_files() -> int:
                 return len(stale_ids)
 
 
+def _delete_gallery_entries_by_ids(
+    conn: sqlite3.Connection,
+    image_ids: Sequence[str],
+) -> tuple[int, int]:
+    unique_ids = [image_id for image_id in dict.fromkeys(image_ids) if image_id]
+    if not unique_ids:
+        return 0, 0
+
+    placeholders = ", ".join("?" for _ in unique_ids)
+    rows = conn.execute(
+        f"SELECT id, filename FROM gallery_entries WHERE id IN ({placeholders})",
+        tuple(unique_ids),
+    ).fetchall()
+    if not rows:
+        return 0, 0
+
+    removed_ids = [row["id"] for row in rows]
+    removed_filenames = {row["filename"] for row in rows if row["filename"]}
+    delete_placeholders = ", ".join("?" for _ in removed_ids)
+    conn.execute(
+        f"DELETE FROM gallery_entries WHERE id IN ({delete_placeholders})",
+        tuple(removed_ids),
+    )
+    _invalidate_filter_options_cache()
+
+    remaining_filenames: set[str] = set()
+    if removed_filenames:
+        filename_placeholders = ", ".join("?" for _ in removed_filenames)
+        remaining_rows = conn.execute(
+            f"""
+            SELECT DISTINCT filename
+            FROM gallery_entries
+            WHERE filename IN ({filename_placeholders})
+            """,
+            tuple(removed_filenames),
+        ).fetchall()
+        remaining_filenames = {
+            row["filename"] for row in remaining_rows if row["filename"]
+        }
+
+    deleted_count = 0
+    for filename in removed_filenames - remaining_filenames:
+        if _delete_image_unlocked(filename):
+            deleted_count += 1
+        _delete_thumbnail_unlocked(filename)
+
+    return len(removed_ids), deleted_count
+
+
 def delete_gallery_image(image_id: str) -> tuple[bool, int]:
-    _ensure_database()
-    with _storage_lock:
-        with _connect() as conn:
-            with _transaction(conn):
-                rows = conn.execute(
-                    "SELECT filename FROM gallery_entries WHERE id = ?",
-                    (image_id,),
-                ).fetchall()
-                if not rows:
-                    return False, 0
-
-                removed_filenames = {
-                    row["filename"] for row in rows if row["filename"]
-                }
-                conn.execute("DELETE FROM gallery_entries WHERE id = ?", (image_id,))
-                _invalidate_filter_options_cache()
-
-                remaining_filenames: set[str] = set()
-                if removed_filenames:
-                    placeholders = ", ".join("?" for _ in removed_filenames)
-                    remaining_rows = conn.execute(
-                        f"""
-                        SELECT DISTINCT filename
-                        FROM gallery_entries
-                        WHERE filename IN ({placeholders})
-                        """,
-                        tuple(removed_filenames),
-                    ).fetchall()
-                    remaining_filenames = {
-                        row["filename"] for row in remaining_rows if row["filename"]
-                    }
-
-                deleted_count = 0
-                for filename in removed_filenames - remaining_filenames:
-                    if _delete_image_unlocked(filename):
-                        deleted_count += 1
-                    _delete_thumbnail_unlocked(filename)
-
-                return True, deleted_count
+    deleted_entries, deleted_files = delete_gallery_images([image_id])
+    return deleted_entries > 0, deleted_files
 
 
-def delete_gallery_images(image_ids: list[str]) -> tuple[int, int]:
+def delete_gallery_images(image_ids: Sequence[str]) -> tuple[int, int]:
     _ensure_database()
     if not image_ids:
         return 0, 0
@@ -1362,45 +1339,7 @@ def delete_gallery_images(image_ids: list[str]) -> tuple[int, int]:
     with _storage_lock:
         with _connect() as conn:
             with _transaction(conn):
-                placeholders = ", ".join("?" for _ in image_ids)
-                rows = conn.execute(
-                    f"SELECT id, filename FROM gallery_entries WHERE id IN ({placeholders})",
-                    tuple(image_ids),
-                ).fetchall()
-                if not rows:
-                    return 0, 0
-
-                removed_ids = {row["id"] for row in rows}
-                removed_filenames = {row["filename"] for row in rows if row["filename"]}
-                delete_placeholders = ", ".join("?" for _ in removed_ids)
-                conn.execute(
-                    f"DELETE FROM gallery_entries WHERE id IN ({delete_placeholders})",
-                    tuple(removed_ids),
-                )
-                _invalidate_filter_options_cache()
-
-                remaining_filenames: set[str] = set()
-                if removed_filenames:
-                    filename_placeholders = ", ".join("?" for _ in removed_filenames)
-                    remaining_rows = conn.execute(
-                        f"""
-                        SELECT DISTINCT filename
-                        FROM gallery_entries
-                        WHERE filename IN ({filename_placeholders})
-                        """,
-                        tuple(removed_filenames),
-                    ).fetchall()
-                    remaining_filenames = {
-                        row["filename"] for row in remaining_rows if row["filename"]
-                    }
-
-                deleted_count = 0
-                for filename in removed_filenames - remaining_filenames:
-                    if _delete_image_unlocked(filename):
-                        deleted_count += 1
-                    _delete_thumbnail_unlocked(filename)
-
-                return len(removed_ids), deleted_count
+                return _delete_gallery_entries_by_ids(conn, image_ids)
 
 
 def delete_all_gallery_images() -> tuple[int, int]:

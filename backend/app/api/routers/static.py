@@ -1,9 +1,7 @@
-import sys
-
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from ..app_state import FRONTEND_BUILD_DIR
+from ..app_state import FRONTEND_BUILD_DIR, app
 from ..csp import frontend_index_response
 from ...core import settings as config
 from ...core.utils import utc_now
@@ -14,8 +12,7 @@ router = APIRouter()
 
 
 def get_frontend_build_dir():
-    contract_app = sys.modules.get("backend.app.api.contract_app")
-    return getattr(contract_app, "FRONTEND_BUILD_DIR", FRONTEND_BUILD_DIR)
+    return getattr(app.state, "frontend_build_dir", FRONTEND_BUILD_DIR)
 
 
 @router.get("/favicon.ico")

@@ -1,30 +1,21 @@
 import asyncio
-import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ..app_state import app
 from ..jobs import (
-    build_pending_job,
-    ensure_job_queue_capacity,
     get_generate_job_tasks,
     get_generate_job_webhooks,
     get_job_subscribers,
     get_jobs_subscribers,
     list_active_generate_jobs,
     publish_queue,
+    queue_image_job,
     run_generate_job,
     serialize_sse_event,
     store_generate_job,
-    track_generate_job_task,
     trim_generate_jobs,
-    validate_job_webhook_url,
-)
-from ..presets import (
-    get_active_preset,
-    get_effective_preset_api_key,
-    get_upstream_socks5_proxy,
 )
 from ...core.api_paths import normalize_api_path
 from ...core.constants import ACTIVE_GENERATE_JOB_STATUSES
@@ -43,54 +34,34 @@ router = APIRouter()
 
 @router.post("/api/generate", response_model=GenerateJobResponse, status_code=202)
 async def generate(req: GenerateRequest):
-    active_preset = get_active_preset()
-    api_url = str(active_preset.get("api_url") or "").rstrip("/")
-    api_path = normalize_api_path(
-        str(active_preset.get("api_path") or "/v1/images/generations")
-    )
-    api_preset_name = active_preset.get("name") or "Untitled preset"
+    def start_generate_job(
+        job_id: str,
+        api_url: str,
+        api_key: str,
+        api_path: str,
+        api_preset_name: str,
+        socks5_proxy: str,
+    ):
+        return run_generate_job(
+            job_id,
+            api_url,
+            api_key,
+            api_path,
+            api_preset_name,
+            req,
+            socks5_proxy,
+        )
 
-    if not api_url:
-        raise HTTPException(status_code=400, detail="API URL not configured. Please set it in Settings.")
-    api_key = get_effective_preset_api_key(active_preset)
-    socks5_proxy = get_upstream_socks5_proxy()
-
-    webhook_url = validate_job_webhook_url(req.webhook_url)
-    ensure_job_queue_capacity()
-    job_id = str(uuid.uuid4())
-    if webhook_url:
-        get_generate_job_webhooks()[job_id] = webhook_url
-    pending_job = build_pending_job(
-        job_id=job_id,
+    return queue_image_job(
         req=req,
         operation="generation",
-        message="Queued image generation",
-        api_path=api_path,
-        api_preset_name=api_preset_name,
-    )
-    store_generate_job(job_id, pending_job)
-    track_generate_job_task(
-        job_id,
-        asyncio.create_task(
-            run_generate_job(
-                job_id,
-                api_url,
-                api_key,
-                api_path,
-                api_preset_name,
-                req,
-                socks5_proxy,
-            )
+        api_path=lambda preset: normalize_api_path(
+            str(preset.get("api_path") or "/v1/images/generations")
         ),
+        queued_message="Queued image generation",
+        task_factory=start_generate_job,
     )
 
-    return GenerateJobResponse(
-        job_id=job_id,
-        status="queued",
-        stage="queued",
-        message="Queued image generation",
-        operation="generation",
-    )
 
 @router.get("/api/generate/jobs", response_model=list[GenerateJobStatus])
 async def list_generate_jobs(
