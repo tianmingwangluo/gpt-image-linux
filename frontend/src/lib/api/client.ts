@@ -32,6 +32,7 @@ export async function apiFetch<T>(url: string, options: RequestInit = {}, action
       }
     });
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
     const message = error instanceof Error ? error.message : translate().messages.failedToFetch;
     throw new Error(translate().messages.networkError(message));
   }

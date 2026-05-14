@@ -64,19 +64,34 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
 function createGalleryStore() {
   const { subscribe, set, update } = writable<GalleryState>(initialGalleryState);
   let state = initialGalleryState;
   let filterTimer: ReturnType<typeof setTimeout> | null = null;
+  let requestSeq = 0;
+  let abortController: AbortController | null = null;
 
   subscribe((value) => {
     state = value;
   });
 
   async function loadGallery(page = state.page) {
+    const seq = ++requestSeq;
+    const filters = { ...state.filters };
+    abortController?.abort();
+    abortController = new AbortController();
     update((current) => ({ ...current, loading: true }));
     try {
-      const gallery = await apiFetch<GalleryResponse>(`/api/gallery?${buildGalleryParams(page, state.filters).toString()}`, {}, 'loading gallery');
+      const gallery = await apiFetch<GalleryResponse>(
+        `/api/gallery?${buildGalleryParams(page, filters).toString()}`,
+        { signal: abortController.signal },
+        'loading gallery'
+      );
+      if (seq !== requestSeq) return;
       const visibleIds = new Set(gallery.images.map((image) => image.id));
       const selectedIds = new Set([...state.selectedIds].filter((id) => visibleIds.has(id)));
       update((current) => ({
@@ -86,8 +101,15 @@ function createGalleryStore() {
         selectedIds,
         selectionMode: selectedIds.size > 0 ? current.selectionMode : false
       }));
+    } catch (error) {
+      if (seq !== requestSeq) return;
+      if (isAbortError(error)) return;
+      throw error;
     } finally {
-      update((current) => ({ ...current, loading: false }));
+      if (seq === requestSeq) {
+        abortController = null;
+        update((current) => ({ ...current, loading: false }));
+      }
     }
   }
 
@@ -227,6 +249,9 @@ function createGalleryStore() {
   function cleanup() {
     if (filterTimer) clearTimeout(filterTimer);
     filterTimer = null;
+    requestSeq += 1;
+    abortController?.abort();
+    abortController = null;
   }
 
   return {

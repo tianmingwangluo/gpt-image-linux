@@ -1,16 +1,56 @@
 <script lang="ts">
   import type { GenerateJobStatus } from '$lib/api/types';
   import { t } from '$lib/i18n';
-  import { operationLabel, stageLabel, statusLabel } from '$lib/utils/format';
+  import { formatBeijingTime, operationLabel, stageLabel, statusLabel } from '$lib/utils/format';
+
+  type JobsTab = 'running' | 'history';
+  type MaybePromise = void | Promise<void>;
+
+  const ACTIVE_STATUSES = new Set(['queued', 'running']);
 
   export let open = false;
   export let jobs: GenerateJobStatus[] = [];
+  export let historyJobs: GenerateJobStatus[] = [];
+  export let historyLoading = false;
+  export let historyLoaded = false;
   export let selectedIds: Set<string> = new Set();
   export let onClose: () => void = () => {};
-  export let onRefresh: () => void = () => {};
+  export let onRefresh: () => MaybePromise = () => {};
+  export let onRefreshHistory: () => MaybePromise = () => {};
   export let onToggle: (jobId: string) => void = () => {};
   export let onToggleAll: () => void = () => {};
-  export let onCancelSelected: () => void = () => {};
+  export let onCancelSelected: () => MaybePromise = () => {};
+  export let onUseJob: (job: GenerateJobStatus) => void = () => {};
+  export let onRetryJob: (job: GenerateJobStatus) => void = () => {};
+
+  let activeTab: JobsTab = 'running';
+
+  $: if (!open) activeTab = 'running';
+
+  function selectTab(tab: JobsTab) {
+    activeTab = tab;
+    if (tab === 'history' && !historyLoaded && !historyLoading) void onRefreshHistory();
+  }
+
+  function refreshCurrentTab() {
+    if (activeTab === 'history') void onRefreshHistory();
+    else void onRefresh();
+  }
+
+  function isActiveJob(job: GenerateJobStatus) {
+    return ACTIVE_STATUSES.has(job.status);
+  }
+
+  function statusClass(job: GenerateJobStatus) {
+    if (job.status === 'success') return 'text-emerald-300';
+    if (job.status === 'error') return 'text-red-300';
+    if (job.status === 'running') return 'text-cyan-300';
+    return 'text-amber-300';
+  }
+
+  function jobMeta(job: GenerateJobStatus) {
+    return [job.model, job.size, job.api_preset_name].filter(Boolean).join(' / ');
+  }
 </script>
 
 {#if open}
@@ -25,45 +65,104 @@
         <button type="button" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" aria-label={$t.jobs.closeLabel} on:click={onClose}>x</button>
       </div>
 
-      <div class="flex items-center justify-end gap-3 border-b border-zinc-800 p-5">
-        <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40" disabled={!jobs.length} on:click={onToggleAll}>
-          {$t.jobs.selectAll}
-        </button>
-        <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={onRefresh}>
-          {$t.jobs.refresh}
-        </button>
+      <div class="flex flex-col gap-3 border-b border-zinc-800 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div class="grid grid-cols-2 rounded-lg border border-zinc-800 bg-zinc-950 p-1 text-xs font-medium">
+          <button type="button" class={`rounded-md px-3 py-1.5 ${activeTab === 'running' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-200'}`} on:click={() => selectTab('running')}>
+            {$t.jobs.runningTab}
+          </button>
+          <button type="button" class={`rounded-md px-3 py-1.5 ${activeTab === 'history' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-200'}`} on:click={() => selectTab('history')}>
+            {$t.jobs.historyTab}
+          </button>
+        </div>
+        <div class="flex justify-end gap-3">
+          {#if activeTab === 'running'}
+            <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40" disabled={!jobs.length} on:click={onToggleAll}>
+              {$t.jobs.selectAll}
+            </button>
+          {/if}
+          <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={refreshCurrentTab}>
+            {$t.jobs.refresh}
+          </button>
+        </div>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-5">
-        {#if jobs.length === 0}
+        {#if activeTab === 'running' && jobs.length === 0}
           <div class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/35 px-4 py-10 text-center">
             <p class="text-sm font-medium text-zinc-300">{$t.jobs.noRunning}</p>
             <p class="mt-2 text-xs text-zinc-500">{$t.jobs.noRunningHint}</p>
           </div>
-        {:else}
+        {:else if activeTab === 'running'}
           <div class="space-y-3">
             {#each jobs as job}
-              <label class="flex gap-3 rounded-xl border border-zinc-800 bg-zinc-950/45 p-4">
+              <div class="flex gap-3 rounded-xl border border-zinc-800 bg-zinc-950/45 p-4">
                 <input type="checkbox" class="mt-1 accent-emerald-500" checked={selectedIds.has(job.job_id)} on:change={() => onToggle(job.job_id)} />
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center justify-between gap-3">
                     <span class="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400">{operationLabel(job.operation, $t.operations)}</span>
-                    <span class="text-xs font-medium text-emerald-300">{statusLabel(job.status, $t.statuses)}</span>
+                    <span class={`text-xs font-medium ${statusClass(job)}`}>{statusLabel(job.status, $t.statuses)}</span>
                   </div>
                   <p class="mt-2 truncate text-sm text-zinc-200">{job.prompt || $t.common.untitledJob}</p>
                   <p class="mt-1 truncate text-xs text-zinc-500">{stageLabel(job, $t.stages)}</p>
                 </div>
-              </label>
+              </div>
+            {/each}
+          </div>
+        {:else if historyLoading}
+          <div class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/35 px-4 py-10 text-center">
+            <p class="text-sm font-medium text-zinc-300">{$t.jobs.historyLoading}</p>
+          </div>
+        {:else if historyJobs.length === 0}
+          <div class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/35 px-4 py-10 text-center">
+            <p class="text-sm font-medium text-zinc-300">{$t.jobs.noHistory}</p>
+            <p class="mt-2 text-xs text-zinc-500">{$t.jobs.noHistoryHint}</p>
+          </div>
+        {:else}
+          <div class="space-y-3">
+            {#each historyJobs as job}
+              <article class="rounded-xl border border-zinc-800 bg-zinc-950/45 p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400">{operationLabel(job.operation, $t.operations)}</span>
+                  <span class={`text-xs font-medium ${statusClass(job)}`}>{statusLabel(job.status, $t.statuses)}</span>
+                </div>
+                <p class="mt-2 line-clamp-2 text-sm text-zinc-200">{job.prompt || $t.common.untitledJob}</p>
+                <p class="mt-1 truncate text-xs text-zinc-500">{stageLabel(job, $t.stages)}</p>
+                <div class="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+                  {#if jobMeta(job)}
+                    <span>{jobMeta(job)}</span>
+                  {/if}
+                  <span>{formatBeijingTime(job.completed_at || job.updated_at || job.created_at)}</span>
+                  {#if job.duration}
+                    <span>{$t.common.duration}: {job.duration}</span>
+                  {/if}
+                </div>
+                <div class="mt-4 flex flex-wrap justify-end gap-2">
+                  <button type="button" class="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800" on:click={() => onUseJob(job)}>
+                    {$t.jobs.useAsPrompt}
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-emerald-500/40 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isActiveJob(job)}
+                    title={isActiveJob(job) ? $t.jobs.retryUnavailable : $t.jobs.retry}
+                    on:click={() => onRetryJob(job)}
+                  >
+                    {$t.jobs.retry}
+                  </button>
+                </div>
+              </article>
             {/each}
           </div>
         {/if}
       </div>
 
-      <div class="border-t border-zinc-800 p-5">
-        <button type="button" disabled={!selectedIds.size} class="w-full rounded-xl bg-red-600 px-4 py-3 text-sm font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40" on:click={onCancelSelected}>
-          {$t.jobs.cancelSelected}
-        </button>
-      </div>
+      {#if activeTab === 'running'}
+        <div class="border-t border-zinc-800 p-5">
+          <button type="button" disabled={!selectedIds.size} class="w-full rounded-xl bg-red-600 px-4 py-3 text-sm font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40" on:click={onCancelSelected}>
+            {$t.jobs.cancelSelected}
+          </button>
+        </div>
+      {/if}
     </aside>
   </div>
 {/if}

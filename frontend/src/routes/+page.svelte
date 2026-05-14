@@ -104,10 +104,16 @@
     void settingsStore.checkPresetHealth(presetId);
   }
 
+  function openJobsDrawer() {
+    setUi('jobsOpen', true);
+    void jobsStore.loadJobHistory();
+  }
+
   function updatePreviewFromJob(job: GenerateJobStatus) {
     previewStore.setPreview(jobsStore.previewFromJob(job, $previewStore));
     if (job.status !== 'queued' && job.status !== 'running') {
       void jobsStore.loadJobs();
+      void jobsStore.refreshHistoryIfLoaded();
       if (job.status === 'success') void galleryStore.loadGallery(1);
     }
   }
@@ -211,6 +217,51 @@
     showToast($t.messages.imageUrlCopied);
   }
 
+  function normalizeJobQuality(value: string | null | undefined): PromptFormState['quality'] {
+    if (value === 'auto' || value === 'low' || value === 'medium' || value === 'high') return value;
+    return initialPromptFormState.quality;
+  }
+
+  function normalizeJobOutputFormat(value: string | null | undefined): PromptFormState['outputFormat'] {
+    if (value === 'png' || value === 'jpeg' || value === 'webp') return value;
+    return initialPromptFormState.outputFormat;
+  }
+
+  function jobToPromptForm(job: GenerateJobStatus): PromptFormState {
+    return {
+      prompt: job.prompt || '',
+      size: job.size || initialPromptFormState.size,
+      model: job.model || initialPromptFormState.model,
+      quality: normalizeJobQuality(job.quality),
+      outputFormat: normalizeJobOutputFormat(job.output_format),
+      outputCompression: job.output_compression === null || job.output_compression === undefined ? '' : String(job.output_compression),
+      quantity: Math.min(Math.max(Number(job.n) || initialPromptFormState.quantity, 1), 10),
+      responseFormat: job.response_format === 'url' || job.response_format === 'b64_json' ? job.response_format : '',
+      webhookUrl: ''
+    };
+  }
+
+  function useJobAsPrompt(job: GenerateJobStatus) {
+    form = jobToPromptForm(job);
+    setUi('jobsOpen', false);
+    showToast($t.messages.jobLoadedIntoPrompt);
+  }
+
+  function retryJob(job: GenerateJobStatus) {
+    form = jobToPromptForm(job);
+    setUi('jobsOpen', false);
+    if (job.operation === 'edit') {
+      if (!$editSourceStore.file && !$editSourceStore.selectedGalleryImageId) {
+        previewStore.setError($t.messages.editRetryNeedsSource);
+        showToast($t.messages.editRetryNeedsSource);
+        return;
+      }
+      editImage();
+      return;
+    }
+    generateImage();
+  }
+
   function clampQuantity() {
     form = { ...form, quantity: Math.min(Math.max(Number(form.quantity) || 1, 1), 10) };
   }
@@ -257,7 +308,7 @@
   hasVersionUpdate={versionHasUpdate}
   {releaseUrl}
   {activeJobsCount}
-  onOpenJobs={() => setUi('jobsOpen', true)}
+  onOpenJobs={openJobsDrawer}
   onOpenSettings={() => setUi('settingsOpen', true)}
 />
 
@@ -278,12 +329,18 @@
 <JobHistoryDrawer
   open={$uiStore.jobsOpen}
   jobs={$jobsStore.jobs}
+  historyJobs={$jobsStore.historyJobs}
+  historyLoading={$jobsStore.historyLoading}
+  historyLoaded={$jobsStore.historyLoaded}
   selectedIds={$jobsStore.selectedIds}
   onClose={() => setUi('jobsOpen', false)}
   onRefresh={jobsStore.loadJobs}
+  onRefreshHistory={jobsStore.loadJobHistory}
   onToggle={jobsStore.toggleSelection}
   onToggleAll={jobsStore.toggleAll}
   onCancelSelected={jobsStore.cancelSelected}
+  onUseJob={useJobAsPrompt}
+  onRetryJob={retryJob}
 />
 
 <main class="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
