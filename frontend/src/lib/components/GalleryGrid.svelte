@@ -92,7 +92,7 @@
     <input
       value={filters.prompt}
       placeholder={$t.gallery.filterPrompt}
-      class="min-w-[200px] flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none"
+      class="min-w-[160px] flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none"
       on:input={(event) => onFilter('prompt', event.currentTarget.value)}
     />
     <select value={filters.model} class="min-w-[140px] rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none" on:change={(event) => onFilter('model', event.currentTarget.value)}>
@@ -118,7 +118,7 @@
       value={filters.dateFrom}
       aria-label={$t.gallery.dateFrom}
       placeholder={$t.gallery.dateFrom}
-      class="w-[160px] rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none"
+      class="w-[135px] rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none"
       on:change={(event) => onFilter('dateFrom', event.currentTarget.value)}
     />
     <input
@@ -126,7 +126,7 @@
       value={filters.dateTo}
       aria-label={$t.gallery.dateTo}
       placeholder={$t.gallery.dateTo}
-      class="w-[160px] rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none"
+      class="w-[135px] rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none"
       on:change={(event) => onFilter('dateTo', event.currentTarget.value)}
     />
     <label class="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-300">
