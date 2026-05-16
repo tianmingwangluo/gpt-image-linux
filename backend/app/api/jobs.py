@@ -9,7 +9,12 @@ from typing import Literal
 
 from fastapi import HTTPException
 
-from .app_state import GENERATE_JOB_PERSIST_INTERVAL_SECONDS, MAX_GENERATE_JOBS, app
+from .app_state import (
+    GENERATE_JOB_PERSIST_INTERVAL_SECONDS,
+    GENERATE_JOBS_BROADCAST_DEBOUNCE_SECONDS,
+    MAX_GENERATE_JOBS,
+    app,
+)
 from .presets import get_active_preset, get_effective_preset_api_key, get_exception_message, get_upstream_socks5_proxy
 from ..core import settings as config
 from ..core import validators as ssrf
@@ -51,18 +56,104 @@ def publish_queue(queue: asyncio.Queue, event: dict):
             pass
 
 
-def publish_generate_job(job: dict):
+def publish_generate_job(
+    job: dict,
+    *,
+    list_debounce: bool = True,
+    list_reconcile: bool = False,
+):
     event = {"event": "job", "data": job}
     for queue in list(get_job_subscribers().get(job["job_id"], set())):
         publish_queue(queue, event)
-    publish_generate_jobs()
+    publish_generate_jobs(debounce=list_debounce, reconcile=list_reconcile)
 
 
-def publish_generate_jobs():
-    jobs = list_active_generate_jobs()
+def sort_generate_jobs(jobs: list[dict]) -> list[dict]:
+    jobs.sort(
+        key=lambda job: job.get("updated_at") or job.get("created_at", ""),
+        reverse=True,
+    )
+    return jobs
+
+
+def snapshot_active_generate_jobs_from_memory() -> list[dict]:
+    jobs = [
+        job.copy()
+        for job in app.state.generate_jobs.values()
+        if job.get("status") in ACTIVE_GENERATE_JOB_STATUSES
+    ]
+    return sort_generate_jobs(jobs)
+
+
+def reconcile_active_generate_jobs_from_storage() -> list[dict]:
+    jobs_by_id = {
+        job["job_id"]: job
+        for job in storage.list_generate_jobs(statuses=ACTIVE_GENERATE_JOB_STATUSES)
+    }
+    for job_id, job in app.state.generate_jobs.items():
+        if job.get("status") in ACTIVE_GENERATE_JOB_STATUSES:
+            jobs_by_id[job_id] = job
+    app.state.generate_jobs = jobs_by_id
+    return snapshot_active_generate_jobs_from_memory()
+
+
+def list_active_generate_jobs(*, reconcile: bool = False) -> list[dict]:
+    if reconcile:
+        return reconcile_active_generate_jobs_from_storage()
+    return snapshot_active_generate_jobs_from_memory()
+
+
+def publish_generate_jobs_now(*, reconcile: bool = False):
+    jobs = list_active_generate_jobs(reconcile=reconcile)
     event = {"event": "jobs", "data": jobs}
     for queue in list(get_jobs_subscribers()):
         publish_queue(queue, event)
+
+
+async def publish_generate_jobs_debounced():
+    try:
+        await asyncio.sleep(GENERATE_JOBS_BROADCAST_DEBOUNCE_SECONDS)
+        reconcile = bool(app.state.generate_jobs_broadcast_reconcile)
+        app.state.generate_jobs_broadcast_reconcile = False
+        publish_generate_jobs_now(reconcile=reconcile)
+    finally:
+        if app.state.generate_jobs_broadcast_task is asyncio.current_task():
+            app.state.generate_jobs_broadcast_task = None
+
+
+def cancel_pending_generate_jobs_broadcast():
+    task = app.state.generate_jobs_broadcast_task
+    if task and not task.done():
+        task.cancel()
+    app.state.generate_jobs_broadcast_task = None
+    app.state.generate_jobs_broadcast_reconcile = False
+
+
+def publish_generate_jobs(*, debounce: bool = True, reconcile: bool = False):
+    if not get_jobs_subscribers():
+        return
+
+    if not debounce:
+        cancel_pending_generate_jobs_broadcast()
+        publish_generate_jobs_now(reconcile=reconcile)
+        return
+
+    if reconcile:
+        app.state.generate_jobs_broadcast_reconcile = True
+
+    task = app.state.generate_jobs_broadcast_task
+    if task and not task.done():
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        publish_generate_jobs_now(reconcile=reconcile)
+        return
+
+    app.state.generate_jobs_broadcast_task = loop.create_task(
+        publish_generate_jobs_debounced()
+    )
 
 
 def get_generate_job_webhooks() -> dict[str, str]:
@@ -133,23 +224,15 @@ def store_generate_job(job_id: str, updates: dict, *, persist: bool = True) -> d
         app.state.generate_job_last_persist_at.pop(job_id, None)
     if should_persist_generate_job(job_id, job, persist):
         storage.upsert_generate_job(job)
-    publish_generate_job(job)
-    if status not in ACTIVE_GENERATE_JOB_STATUSES:
+    is_terminal = status not in ACTIVE_GENERATE_JOB_STATUSES
+    publish_generate_job(
+        job,
+        list_debounce=not is_terminal,
+        list_reconcile=is_terminal,
+    )
+    if is_terminal:
         dispatch_job_webhook(job)
     return job
-
-
-def list_active_generate_jobs() -> list[dict]:
-    jobs_by_id = {
-        job["job_id"]: job
-        for job in storage.list_generate_jobs(statuses=ACTIVE_GENERATE_JOB_STATUSES)
-    }
-    for job_id, job in app.state.generate_jobs.items():
-        if job.get("status") in ACTIVE_GENERATE_JOB_STATUSES:
-            jobs_by_id[job_id] = job
-    jobs = list(jobs_by_id.values())
-    jobs.sort(key=lambda job: job.get("updated_at") or job.get("created_at", ""), reverse=True)
-    return jobs
 
 
 def trim_generate_jobs():

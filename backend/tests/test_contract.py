@@ -54,6 +54,7 @@ def _configure_runtime(tmp_path: Path, *, access_key: str = "", allow_unauthenti
     config.WEBHOOK_TIMEOUT_SECONDS = 1
     config.WEBHOOK_MAX_ATTEMPTS = 1
     config.MAX_FILE_SIZE_MB = 50
+    config.MAX_UPSTREAM_JSON_MB = 128
     config.MAX_PENDING_EDIT_SOURCE_MB = config.MAX_FILE_SIZE_MB * 4
     config.IMPORT_ARCHIVE_MAX_MB = config.MAX_FILE_SIZE_MB * 20
     config.IMPORT_MAX_FILES = 500
@@ -1842,6 +1843,31 @@ def test_image_url_download_rejects_stream_over_limit(client):
         asyncio.run(_download_with_fake_session(session, "https://example.com/image.png"))
 
 
+def test_upstream_json_response_rejects_stream_over_limit(tmp_path):
+    _configure_runtime(tmp_path)
+    from backend.app.integrations import upstream_client
+
+    config.MAX_UPSTREAM_JSON_MB = 1
+    too_large_json = b'{"data":"' + (b"x" * (1024 * 1024)) + b'"}'
+    resp = _FakeResponse(
+        200,
+        {"Content-Type": "application/json"},
+        [too_large_json],
+    )
+
+    with pytest.raises(
+        upstream_client.UpstreamApiError,
+        match="Upstream JSON response too large",
+    ):
+        asyncio.run(
+            upstream_client.parse_upstream_json_response(
+                resp,
+                "/v1/images/generations",
+                None,
+            )
+        )
+
+
 def test_image_url_download_rejects_private_peer_ip(client):
     session = _FakeSession(
         [
@@ -2063,6 +2089,52 @@ def test_running_progress_persists_only_terminal_states(tmp_path, monkeypatch):
     running_upserts = [item for item in upserted if item["status"] == "running"]
     assert len(running_upserts) <= 2
     assert any(item.get("stage") == "starting_generation" for item in running_upserts)
+
+
+def test_generate_jobs_list_broadcast_debounces_without_db_reads(client, monkeypatch):
+    list_calls = []
+
+    def tracking_list_generate_jobs(*args, **kwargs):
+        list_calls.append((args, kwargs))
+        return []
+
+    monkeypatch.setattr(storage, "list_generate_jobs", tracking_list_generate_jobs)
+
+    async def run_updates():
+        queue: asyncio.Queue = asyncio.Queue(maxsize=20)
+        subscribers = jobs.get_jobs_subscribers()
+        subscribers.add(queue)
+        try:
+            for index in range(3):
+                jobs.store_generate_job(
+                    "job-memory-broadcast",
+                    {
+                        "status": "running",
+                        "stage": f"stage_{index}",
+                        "message": f"Stage {index}",
+                        "operation": "generation",
+                        "prompt": "memory broadcast",
+                        "size": "1024x1024",
+                    },
+                    persist=False,
+                )
+
+            await asyncio.sleep(0.45)
+
+            events = []
+            while not queue.empty():
+                events.append(queue.get_nowait())
+            return events
+        finally:
+            subscribers.discard(queue)
+
+    events = asyncio.run(run_updates())
+
+    assert list_calls == []
+    assert len(events) == 1
+    assert events[0]["event"] == "jobs"
+    assert events[0]["data"][0]["job_id"] == "job-memory-broadcast"
+    assert events[0]["data"][0]["stage"] == "stage_2"
 
 
 def test_validation_422_and_global_500(tmp_path, monkeypatch):

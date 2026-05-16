@@ -49,7 +49,7 @@ export const initialPromptFormState: PromptFormState = {
   outputFormat: 'png',
   outputCompression: '',
   quantity: 1,
-  responseFormat: '',
+  responseFormat: 'url',
   webhookUrl: ''
 };
 

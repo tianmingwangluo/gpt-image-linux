@@ -305,6 +305,7 @@ def get_image_transfer_stage(image_data: dict) -> tuple[str, str]:
 
 MAX_IMAGE_REDIRECTS = 3
 IMAGE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+UPSTREAM_RESPONSE_CHUNK_SIZE = 1024 * 1024
 
 
 async def read_limited_response(response: aiohttp.ClientResponse, max_bytes: int) -> bytes:
@@ -326,6 +327,60 @@ async def read_limited_response(response: aiohttp.ClientResponse, max_bytes: int
             raise UpstreamImageDownloadError(f"Image too large: {total} bytes (max {max_bytes})")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def get_response_charset(response: aiohttp.ClientResponse) -> str:
+    charset = getattr(response, "charset", None)
+    if charset:
+        return charset
+
+    content_type = response.headers.get("Content-Type", "")
+    match = re.search(r"charset=([^;]+)", content_type, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return "utf-8"
+
+
+async def read_limited_text_response(
+    response: aiohttp.ClientResponse,
+    max_bytes: int,
+    *,
+    label: str = "Upstream response",
+) -> str:
+    content_length = response.headers.get("Content-Length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise UpstreamApiError(
+                    f"{label} too large: {content_length} bytes (max {max_bytes})"
+                )
+        except ValueError:
+            pass
+
+    content = getattr(response, "content", None)
+    if content is None or not hasattr(content, "iter_chunked"):
+        response_text = await response.text()
+        response_size = len(response_text.encode("utf-8"))
+        if response_size > max_bytes:
+            raise UpstreamApiError(
+                f"{label} too large: {response_size} bytes (max {max_bytes})"
+            )
+        return response_text
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in content.iter_chunked(UPSTREAM_RESPONSE_CHUNK_SIZE):
+        total += len(chunk)
+        if total > max_bytes:
+            raise UpstreamApiError(f"{label} too large: {total} bytes (max {max_bytes})")
+        chunks.append(chunk)
+
+    body = b"".join(chunks)
+    encoding = get_response_charset(response)
+    try:
+        return body.decode(encoding)
+    except (LookupError, UnicodeDecodeError) as e:
+        raise UpstreamApiError(f"{label} is not valid {encoding} text") from e
 
 
 async def download_image_url(
@@ -363,16 +418,24 @@ async def download_image_url(
 async def extract_image_bytes(
     download_session: aiohttp.ClientSession,
     image_data: dict,
-    response_text: str,
+    response_preview: str,
+    max_bytes: int,
 ) -> bytes:
     if "b64_json" in image_data and image_data["b64_json"]:
-        return base64.b64decode(image_data["b64_json"])
+        b64_json = str(image_data.pop("b64_json"))
+        max_b64_chars = ((max_bytes + 2) // 3) * 4 + 4
+        if len(b64_json) > max_b64_chars:
+            raise UpstreamImageDownloadError(
+                f"Image too large: base64 payload is {len(b64_json)} chars "
+                f"(max {max_b64_chars})"
+            )
+        return base64.b64decode(b64_json)
 
     if "url" in image_data and image_data["url"]:
         return await download_image_url(download_session, image_data["url"])
 
     raise UpstreamImageDownloadError(
-        f"No image data (b64_json or url) in upstream response: {response_text}"
+        f"No image data (b64_json or url) in upstream response: {response_preview}"
     )
 
 
@@ -422,7 +485,7 @@ async def save_gallery_entries_from_upstream_data(
     *,
     download_session: aiohttp.ClientSession,
     data: list[dict[str, Any]],
-    response_text: str,
+    response_preview: str,
     payload: GenerateRequest,
     format_extension: str,
     gallery_metadata: dict[str, Any],
@@ -442,7 +505,8 @@ async def save_gallery_entries_from_upstream_data(
         image_bytes = await extract_image_bytes(
             download_session,
             image_data,
-            response_text,
+            response_preview,
+            max_bytes,
         )
         try:
             if progress:
@@ -596,7 +660,12 @@ async def parse_upstream_json_response(
     progress: ProgressCallback | None,
 ) -> tuple[dict[str, Any], str]:
     status = resp.status
-    response_text = await resp.text()
+    max_response_bytes = config.MAX_UPSTREAM_JSON_MB * 1024 * 1024
+    response_text = await read_limited_text_response(
+        resp,
+        max_response_bytes,
+        label="Upstream JSON response",
+    )
     if progress:
         progress("received_api_response", "Received upstream API response")
 
@@ -628,7 +697,12 @@ async def parse_upstream_chat_completion_response(
     progress: ProgressCallback | None,
 ) -> tuple[dict[str, Any], str]:
     status = resp.status
-    response_text = await resp.text()
+    max_response_bytes = config.MAX_UPSTREAM_JSON_MB * 1024 * 1024
+    response_text = await read_limited_text_response(
+        resp,
+        max_response_bytes,
+        label="Upstream chat response",
+    )
     if progress:
         progress("received_api_response", "Received upstream API response")
 
@@ -748,10 +822,13 @@ async def call_image_generation_api(
                     text_preview = response_text[:200] if isinstance(response_text, str) else str(response_text)[:200]
                     raise UpstreamApiError(f"No image data in upstream response: {text_preview}")
 
+                response_preview = response_text[:200]
+                del response_text
+                del result
                 entries = await save_gallery_entries_from_upstream_data(
                     download_session=download_session,
                     data=data,
-                    response_text=response_text,
+                    response_preview=response_preview,
                     payload=payload,
                     format_extension=format_info["extension"],
                     gallery_metadata=gallery_metadata,
@@ -822,11 +899,14 @@ async def call_image_edit_api(
                 if not data:
                     raise UpstreamApiError(f"No image data in upstream response: {response_text[:200]}")
 
+                response_preview = response_text[:200]
+                del response_text
+                del result
                 async with create_client_session(UPSTREAM_TIMEOUT) as download_session:
                     return await save_gallery_entries_from_upstream_data(
                         download_session=download_session,
                         data=data,
-                        response_text=response_text,
+                        response_preview=response_preview,
                         payload=payload,
                         format_extension=format_info["extension"],
                         gallery_metadata=gallery_metadata,

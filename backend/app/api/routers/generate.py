@@ -81,7 +81,10 @@ async def stream_generate_jobs(request: Request):
     queue: asyncio.Queue = asyncio.Queue(maxsize=20)
     subscribers = get_jobs_subscribers()
     subscribers.add(queue)
-    publish_queue(queue, {"event": "jobs", "data": list_active_generate_jobs()})
+    publish_queue(
+        queue,
+        {"event": "jobs", "data": list_active_generate_jobs(reconcile=True)},
+    )
 
     async def event_stream():
         try:

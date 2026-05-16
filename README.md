@@ -308,7 +308,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 - Format: `PNG`, `JPEG`, or `WebP`
 - Compression: disabled for `PNG`; `0-100` for `JPEG` and `WebP`
 - Quantity: integer from `1` to `10`
-- Response Format: `none`, `b64_json`, or `url`; `none` omits the `response_format` parameter
+- Response Format: `url` by default in the UI, with `none` and `b64_json` still available; `none` omits the `response_format` parameter
 
 ## Import and upload limits
 
@@ -334,7 +334,8 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 | `IP_ALLOWLIST` | empty | Comma-separated allowed IPs/CIDRs |
 | `TRUST_PROXY_HEADERS` | `false` | Read `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto`, or `X-Forwarded-Host` from a trusted reverse proxy |
 | `CSRF_ORIGIN_CHECK_ENABLED` | `true` | Reject cross-origin `POST`, `PATCH`, and `DELETE` requests using `Origin` or `Referer` checks |
-| `MAX_FILE_SIZE_MB` | `50` | Max uploaded image size in MB for edit source images and imported image files |
+| `MAX_FILE_SIZE_MB` | `50` | Max uploaded image size in MB for edit source images, imported image files, and downloaded upstream image URLs |
+| `MAX_UPSTREAM_JSON_MB` | `128` | Max upstream JSON/SSE response body size in MB before parsing; prefer `response_format=url` for large or multi-image results |
 | `IMPORT_ARCHIVE_MAX_MB` | `1000` | Max uploaded ZIP size in MB for `/api/import` |
 | `IMPORT_MAX_FILES` | `500` | Max number of files allowed inside one import archive |
 | `IMPORT_MAX_UNCOMPRESSED_MB` | `1024` | Max total uncompressed size in MB across all files in an import archive |
@@ -393,8 +394,8 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 - app version comes from `APP_VERSION` then `VERSION`; optional GitHub remote check can show a `New` badge without blocking usage
 - presets and gallery/job data persist only in `DATABASE_FILE`
 - generation and edit share one queue (`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`), edit source images are staged under `DATA_DIR/edit-sources` and additionally capped by `MAX_PENDING_EDIT_SOURCE_MB`, support cancellation, and persist terminal history including `completed_at`
-- SSE is the primary progress channel; `/api/generate/jobs` provides list/history (`include_finished=true`), and `/api/generate/jobs/events` streams live job changes
-- upstream image URL downloads are revalidated (SSRF-aware, no blind redirect follow) and bounded by `MAX_FILE_SIZE_MB`
+- SSE is the primary progress channel; `/api/generate/jobs` provides list/history (`include_finished=true`), and `/api/generate/jobs/events` streams debounced live job-list changes from memory
+- upstream JSON/SSE bodies are read with a `MAX_UPSTREAM_JSON_MB` cap before parsing, and upstream image URL downloads are revalidated (SSRF-aware, no blind redirect follow) and bounded by `MAX_FILE_SIZE_MB`
 - `/api/import` enforces ZIP safety/size/count/compression checks; `/api/download-all` writes temp ZIP on disk to avoid high memory usage
 - gallery stores byte-size metadata and thumbnails (`THUMBNAILS_DIR`), with lazy thumbnail and opt-in byte-size backfill for older images
 - startup reconciliation removes gallery rows for missing files and marks previously running/queued jobs as interrupted
@@ -744,7 +745,7 @@ curl http://localhost:9090/health
 - Format：`PNG`、`JPEG`、`WebP`
 - Compression：`PNG` 不可用；`JPEG` 和 `WebP` 可设置 `0-100`
 - Quantity：`1` 到 `10`
-- Response Format：`none`、`b64_json` 或 `url`；`none` 会省略 `response_format` 参数
+- Response Format：界面默认 `url`，仍可选 `none` 和 `b64_json`；`none` 会省略 `response_format` 参数
 
 ## 导入与上传限制
 
@@ -770,7 +771,8 @@ curl http://localhost:9090/health
 | `IP_ALLOWLIST` | 空 | 允许访问的 IP/CIDR，逗号分隔 |
 | `TRUST_PROXY_HEADERS` | `false` | 是否读取受信任反向代理的 `X-Forwarded-For`、`X-Real-IP`、`X-Forwarded-Proto` 或 `X-Forwarded-Host` |
 | `CSRF_ORIGIN_CHECK_ENABLED` | `true` | 是否通过 `Origin` 或 `Referer` 拒绝跨站 `POST`、`PATCH`、`DELETE` 请求 |
-| `MAX_FILE_SIZE_MB` | `50` | 上传为编辑源图的图片和导入图片文件的最大体积（MB） |
+| `MAX_FILE_SIZE_MB` | `50` | 上传为编辑源图的图片、导入图片文件和上游图片 URL 下载的最大体积（MB） |
+| `MAX_UPSTREAM_JSON_MB` | `128` | 解析前允许的最大上游 JSON/SSE 响应体积（MB）；大图或多图建议使用 `response_format=url` |
 | `IMPORT_ARCHIVE_MAX_MB` | `1000` | `/api/import` 可上传 ZIP 的最大体积（MB） |
 | `IMPORT_MAX_FILES` | `500` | 单个导入归档允许的最大文件数 |
 | `IMPORT_MAX_UNCOMPRESSED_MB` | `1024` | 导入归档内所有文件解压后的最大总体积（MB） |
@@ -829,8 +831,8 @@ curl http://localhost:9090/health
 - 版本读取顺序是 `APP_VERSION` -> `VERSION`；可选 GitHub 远端检查仅用于显示 `New`，不会阻塞使用
 - 预设与 Gallery/Job 数据只保存在 `DATABASE_FILE`
 - 生成与编辑共用队列（`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`）；编辑源图先落到 `DATA_DIR/edit-sources` 并额外受 `MAX_PENDING_EDIT_SOURCE_MB` 总量限制；支持取消，并持久化终态历史（含 `completed_at`）
-- SSE 是主进度通道；`/api/generate/jobs` 提供列表/历史（`include_finished=true`），`/api/generate/jobs/events` 推送实时变化
-- 上游图片 URL 下载会做 SSRF/重定向目标复核，并受 `MAX_FILE_SIZE_MB` 限制
+- SSE 是主进度通道；`/api/generate/jobs` 提供列表/历史（`include_finished=true`），`/api/generate/jobs/events` 从内存推送 debounce 后的实时任务列表变化
+- 上游 JSON/SSE 响应会在解析前受 `MAX_UPSTREAM_JSON_MB` 限制；上游图片 URL 下载会做 SSRF/重定向目标复核，并受 `MAX_FILE_SIZE_MB` 限制
 - `/api/import` 做 ZIP 安全与体积校验；`/api/download-all` 用磁盘临时 ZIP，避免大图库导出占满内存
 - Gallery 持久化图片字节数和缩略图（`THUMBNAILS_DIR`），旧图按需懒补缩略图
 - 启动时会清理缺失文件对应的 Gallery 记录，并把上次进程遗留的 running/queued 任务标记为 interrupted

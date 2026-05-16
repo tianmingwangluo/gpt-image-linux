@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 FRONTEND_BUILD_DIR = config.PROJECT_ROOT / "frontend" / "build"
 MAX_GENERATE_JOBS = 100
 GENERATE_JOB_PERSIST_INTERVAL_SECONDS = 2.0
+GENERATE_JOBS_BROADCAST_DEBOUNCE_SECONDS = 0.35
 
 
 def cleanup_stale_edit_source_files():
@@ -63,18 +64,25 @@ async def lifespan(app: FastAPI):
     app.state.generate_job_semaphore = asyncio.Semaphore(config.MAX_ACTIVE_GENERATE_JOBS)
     app.state.generate_job_subscribers = {}
     app.state.generate_jobs_subscribers = set()
+    app.state.generate_jobs_broadcast_task = None
+    app.state.generate_jobs_broadcast_reconcile = False
     app.state.generate_job_webhooks = {}
     app.state.generate_job_last_persist_at = {}
     app.state.pending_edit_source_bytes = 0
     app.state.access_failures: dict[str, tuple[int, float]] = {}
+    jobs.reconcile_active_generate_jobs_from_storage()
     try:
         yield
     finally:
+        broadcast_task = app.state.generate_jobs_broadcast_task
+        if broadcast_task and not broadcast_task.done():
+            broadcast_task.cancel()
         tasks = list(jobs.get_generate_job_tasks().values())
         for task in tasks:
             task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        awaitables = [task for task in (broadcast_task, *tasks) if task]
+        if awaitables:
+            await asyncio.gather(*awaitables, return_exceptions=True)
 
 
 app = FastAPI(title="GPT Image Panel", lifespan=lifespan)
