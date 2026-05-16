@@ -4,6 +4,7 @@ import base64
 import json
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
@@ -765,7 +766,7 @@ async def call_image_edit_api(
     api_url: str,
     api_key: str,
     payload: EditRequest,
-    image_bytes: bytes,
+    image_path: Path,
     image_filename: str,
     image_content_type: str,
     api_preset_name: str | None = None,
@@ -786,48 +787,49 @@ async def call_image_edit_api(
 
     if progress:
         progress("building_edit_form", "Building multipart edit request")
-    form = aiohttp.FormData()
-    form.add_field(
-        "image",
-        image_bytes,
-        filename=image_filename or "image.png",
-        content_type=image_content_type or "application/octet-stream",
-    )
-    for key, value in _build_image_params(payload).items():
-        form.add_field(key, str(value))
+    with image_path.open("rb") as image_file:
+        form = aiohttp.FormData()
+        form.add_field(
+            "image",
+            image_file,
+            filename=image_filename or "image.png",
+            content_type=image_content_type or "application/octet-stream",
+        )
+        for key, value in _build_image_params(payload).items():
+            form.add_field(key, str(value))
 
-    async with create_client_session(
-        UPSTREAM_TIMEOUT,
-        socks5_proxy=socks5_proxy,
-    ) as upstream_session:
-        if progress:
-            progress("uploading_edit_image", "Uploading source image and edit parameters")
-        async with upstream_session.post(
-            upstream_url,
-            data=form,
-            headers=headers,
-            allow_redirects=False,
-        ) as resp:
-            if not socks5_proxy:
-                ssrf.validate_response_peer_ip(resp, "Upstream API")
-            result, response_text = await parse_upstream_json_response(
-                resp, api_path, progress
-            )
-
+        async with create_client_session(
+            UPSTREAM_TIMEOUT,
+            socks5_proxy=socks5_proxy,
+        ) as upstream_session:
             if progress:
-                progress("extracting_edit_data", "Extracting edited image data array")
-            data = result.get("data", [])
-            if not data:
-                raise UpstreamApiError(f"No image data in upstream response: {response_text[:200]}")
-
-            async with create_client_session(UPSTREAM_TIMEOUT) as download_session:
-                return await save_gallery_entries_from_upstream_data(
-                    download_session=download_session,
-                    data=data,
-                    response_text=response_text,
-                    payload=payload,
-                    format_extension=format_info["extension"],
-                    gallery_metadata=gallery_metadata,
-                    save_message="Saving edited images",
-                    progress=progress,
+                progress("uploading_edit_image", "Uploading source image and edit parameters")
+            async with upstream_session.post(
+                upstream_url,
+                data=form,
+                headers=headers,
+                allow_redirects=False,
+            ) as resp:
+                if not socks5_proxy:
+                    ssrf.validate_response_peer_ip(resp, "Upstream API")
+                result, response_text = await parse_upstream_json_response(
+                    resp, api_path, progress
                 )
+
+                if progress:
+                    progress("extracting_edit_data", "Extracting edited image data array")
+                data = result.get("data", [])
+                if not data:
+                    raise UpstreamApiError(f"No image data in upstream response: {response_text[:200]}")
+
+                async with create_client_session(UPSTREAM_TIMEOUT) as download_session:
+                    return await save_gallery_entries_from_upstream_data(
+                        download_session=download_session,
+                        data=data,
+                        response_text=response_text,
+                        payload=payload,
+                        format_extension=format_info["extension"],
+                        gallery_metadata=gallery_metadata,
+                        save_message="Saving edited images",
+                        progress=progress,
+                    )

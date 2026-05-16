@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Literal
 
 from fastapi import HTTPException
@@ -163,6 +164,29 @@ def get_generate_job_semaphore() -> asyncio.Semaphore:
     return app.state.generate_job_semaphore
 
 
+def get_pending_edit_source_bytes() -> int:
+    return max(0, int(getattr(app.state, "pending_edit_source_bytes", 0) or 0))
+
+
+def get_max_pending_edit_source_bytes() -> int:
+    return max(0, config.MAX_PENDING_EDIT_SOURCE_MB) * 1024 * 1024
+
+
+def reserve_pending_edit_source_bytes(byte_count: int):
+    if byte_count <= 0:
+        return
+    app.state.pending_edit_source_bytes = get_pending_edit_source_bytes() + byte_count
+
+
+def release_pending_edit_source_bytes(byte_count: int):
+    if byte_count <= 0:
+        return
+    app.state.pending_edit_source_bytes = max(
+        0,
+        get_pending_edit_source_bytes() - byte_count,
+    )
+
+
 def count_active_jobs() -> int:
     jobs = app.state.generate_jobs or {}
     return sum(
@@ -172,10 +196,18 @@ def count_active_jobs() -> int:
     )
 
 
-def ensure_job_queue_capacity():
+def ensure_job_queue_capacity(extra_pending_edit_source_bytes: int = 0):
     capacity = config.MAX_ACTIVE_GENERATE_JOBS + config.MAX_QUEUED_GENERATE_JOBS
     if count_active_jobs() >= capacity:
         raise HTTPException(status_code=429, detail="Generation job queue is full")
+    max_pending_edit_source_bytes = get_max_pending_edit_source_bytes()
+    if (
+        extra_pending_edit_source_bytes > 0
+        and max_pending_edit_source_bytes > 0
+        and get_pending_edit_source_bytes() + extra_pending_edit_source_bytes
+        > max_pending_edit_source_bytes
+    ):
+        raise HTTPException(status_code=429, detail="Edit source queue is full")
 
 
 def track_generate_job_task(job_id: str, task: asyncio.Task):
@@ -275,6 +307,7 @@ def queue_image_job(
     api_path: str | Callable[[dict], str],
     queued_message: str,
     task_factory: Callable[[str, str, str, str, str, str], Awaitable[None]],
+    pending_edit_source_bytes: int = 0,
 ) -> GenerateJobResponse:
     active_preset = get_active_preset()
     api_url = str(active_preset.get("api_url") or "").rstrip("/")
@@ -290,22 +323,26 @@ def queue_image_job(
     socks5_proxy = get_upstream_socks5_proxy()
 
     webhook_url = validate_job_webhook_url(req.webhook_url)
-    ensure_job_queue_capacity()
+    ensure_job_queue_capacity(pending_edit_source_bytes)
     job_id = str(uuid.uuid4())
-    if webhook_url:
-        get_generate_job_webhooks()[job_id] = webhook_url
-    pending_job = build_pending_job(
-        job_id=job_id,
-        req=req,
-        operation=operation,
-        message=queued_message,
-        api_path=resolved_api_path,
-        api_preset_name=api_preset_name,
-    )
-    store_generate_job(job_id, pending_job)
-    track_generate_job_task(
-        job_id,
-        asyncio.create_task(
+    reserved_edit_source_bytes = 0
+    task: asyncio.Task | None = None
+    try:
+        if pending_edit_source_bytes > 0:
+            reserve_pending_edit_source_bytes(pending_edit_source_bytes)
+            reserved_edit_source_bytes = pending_edit_source_bytes
+        if webhook_url:
+            get_generate_job_webhooks()[job_id] = webhook_url
+        pending_job = build_pending_job(
+            job_id=job_id,
+            req=req,
+            operation=operation,
+            message=queued_message,
+            api_path=resolved_api_path,
+            api_preset_name=api_preset_name,
+        )
+        store_generate_job(job_id, pending_job)
+        task = asyncio.create_task(
             task_factory(
                 job_id,
                 api_url,
@@ -314,8 +351,16 @@ def queue_image_job(
                 api_preset_name,
                 socks5_proxy,
             )
-        ),
-    )
+        )
+        track_generate_job_task(job_id, task)
+    except BaseException:
+        if task and not task.done():
+            task.cancel()
+        release_pending_edit_source_bytes(reserved_edit_source_bytes)
+        get_generate_job_webhooks().pop(job_id, None)
+        app.state.generate_jobs.pop(job_id, None)
+        app.state.generate_job_last_persist_at.pop(job_id, None)
+        raise
 
     return GenerateJobResponse(
         job_id=job_id,
@@ -328,7 +373,8 @@ def queue_image_job(
 
 def queue_edit_job(
     req: EditRequest,
-    image_bytes: bytes,
+    image_path: Path,
+    image_source_bytes: int,
     image_filename: str,
     image_content_type: str,
 ) -> GenerateJobResponse:
@@ -346,7 +392,8 @@ def queue_edit_job(
             api_key,
             api_preset_name,
             req,
-            image_bytes,
+            image_path,
+            image_source_bytes,
             image_filename,
             image_content_type,
             socks5_proxy,
@@ -358,6 +405,7 @@ def queue_edit_job(
         api_path="/v1/images/edits",
         queued_message="Queued image edit",
         task_factory=start_edit_job,
+        pending_edit_source_bytes=image_source_bytes,
     )
 
 
@@ -546,38 +594,43 @@ async def run_edit_job(
     api_key: str,
     api_preset_name: str,
     req: EditRequest,
-    image_bytes: bytes,
+    image_path: Path,
+    image_source_bytes: int,
     image_filename: str,
     image_content_type: str,
     socks5_proxy: str = "",
 ):
-    await _run_image_job(
-        job_id=job_id,
-        api_url=api_url,
-        api_path="/v1/images/edits",
-        api_preset_name=api_preset_name,
-        req=req,
-        operation="edit",
-        start_stage="starting_edit",
-        start_message="Starting image edit",
-        success_message="Image edit completed",
-        failed_stage="edit_failed",
-        cancel_message="Image edit job cancelled",
-        log_action="edit",
-        call_upstream=lambda: proxy.call_image_edit_api(
-            api_url,
-            api_key,
-            req,
-            image_bytes,
-            image_filename,
-            image_content_type,
-            api_preset_name,
-            lambda stage, message: set_generate_job_progress(
-                job_id,
-                stage,
-                message,
-                "edit",
+    try:
+        await _run_image_job(
+            job_id=job_id,
+            api_url=api_url,
+            api_path="/v1/images/edits",
+            api_preset_name=api_preset_name,
+            req=req,
+            operation="edit",
+            start_stage="starting_edit",
+            start_message="Starting image edit",
+            success_message="Image edit completed",
+            failed_stage="edit_failed",
+            cancel_message="Image edit job cancelled",
+            log_action="edit",
+            call_upstream=lambda: proxy.call_image_edit_api(
+                api_url,
+                api_key,
+                req,
+                image_path,
+                image_filename,
+                image_content_type,
+                api_preset_name,
+                lambda stage, message: set_generate_job_progress(
+                    job_id,
+                    stage,
+                    message,
+                    "edit",
+                ),
+                socks5_proxy=socks5_proxy,
             ),
-            socks5_proxy=socks5_proxy,
-        ),
-    )
+        )
+    finally:
+        image_path.unlink(missing_ok=True)
+        release_pending_edit_source_bytes(image_source_bytes)

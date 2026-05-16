@@ -342,6 +342,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 | `IMPORT_MAX_COMPRESSION_RATIO` | `100` | Max allowed uncompressed/compressed ratio for any imported file |
 | `MAX_ACTIVE_GENERATE_JOBS` | `2` | Max number of generation and edit jobs running concurrently |
 | `MAX_QUEUED_GENERATE_JOBS` | `20` | Max additional queued generation and edit jobs before new requests are rejected with `429` |
+| `MAX_PENDING_EDIT_SOURCE_MB` | `200` | Max total pending edit source image bytes in MB; set `0` to disable this byte cap |
 | `IMAGES_DIR` | `./images` | Directory for saved images |
 | `THUMBNAILS_DIR` | `./images/thumbs` | Directory for generated gallery thumbnails |
 | `THUMBNAIL_MAX_SIDE` | `512` | Max thumbnail width/height in pixels |
@@ -391,7 +392,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 
 - app version comes from `APP_VERSION` then `VERSION`; optional GitHub remote check can show a `New` badge without blocking usage
 - presets and gallery/job data persist only in `DATABASE_FILE`
-- generation and edit share one queue (`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`), support cancellation, and persist terminal history including `completed_at`
+- generation and edit share one queue (`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`), edit source images are staged under `DATA_DIR/edit-sources` and additionally capped by `MAX_PENDING_EDIT_SOURCE_MB`, support cancellation, and persist terminal history including `completed_at`
 - SSE is the primary progress channel; `/api/generate/jobs` provides list/history (`include_finished=true`), and `/api/generate/jobs/events` streams live job changes
 - upstream image URL downloads are revalidated (SSRF-aware, no blind redirect follow) and bounded by `MAX_FILE_SIZE_MB`
 - `/api/import` enforces ZIP safety/size/count/compression checks; `/api/download-all` writes temp ZIP on disk to avoid high memory usage
@@ -777,6 +778,7 @@ curl http://localhost:9090/health
 | `IMPORT_MAX_COMPRESSION_RATIO` | `100` | 单个导入文件允许的最大解压/压缩体积比 |
 | `MAX_ACTIVE_GENERATE_JOBS` | `2` | 生成和编辑任务允许同时运行的最大数量 |
 | `MAX_QUEUED_GENERATE_JOBS` | `20` | 超出并发后允许继续排队的最大任务数；超过后新请求返回 `429` |
+| `MAX_PENDING_EDIT_SOURCE_MB` | `200` | 待处理编辑源图的总字节上限（MB）；设为 `0` 可关闭该字节上限 |
 | `IMAGES_DIR` | `./images` | 图片存储目录 |
 | `THUMBNAILS_DIR` | `./images/thumbs` | Gallery 缩略图生成目录 |
 | `THUMBNAIL_MAX_SIDE` | `512` | 缩略图最大宽/高像素 |
@@ -826,7 +828,7 @@ curl http://localhost:9090/health
 
 - 版本读取顺序是 `APP_VERSION` -> `VERSION`；可选 GitHub 远端检查仅用于显示 `New`，不会阻塞使用
 - 预设与 Gallery/Job 数据只保存在 `DATABASE_FILE`
-- 生成与编辑共用队列（`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`），支持取消，并持久化终态历史（含 `completed_at`）
+- 生成与编辑共用队列（`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`）；编辑源图先落到 `DATA_DIR/edit-sources` 并额外受 `MAX_PENDING_EDIT_SOURCE_MB` 总量限制；支持取消，并持久化终态历史（含 `completed_at`）
 - SSE 是主进度通道；`/api/generate/jobs` 提供列表/历史（`include_finished=true`），`/api/generate/jobs/events` 推送实时变化
 - 上游图片 URL 下载会做 SSRF/重定向目标复核，并受 `MAX_FILE_SIZE_MB` 限制
 - `/api/import` 做 ZIP 安全与体积校验；`/api/download-all` 用磁盘临时 ZIP，避免大图库导出占满内存

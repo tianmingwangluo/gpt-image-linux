@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import main as backend_main
+from backend.app.api import jobs
 from backend.app.core import settings as config
 from backend.app.repositories import storage
 
@@ -53,6 +54,7 @@ def _configure_runtime(tmp_path: Path, *, access_key: str = "", allow_unauthenti
     config.WEBHOOK_TIMEOUT_SECONDS = 1
     config.WEBHOOK_MAX_ATTEMPTS = 1
     config.MAX_FILE_SIZE_MB = 50
+    config.MAX_PENDING_EDIT_SOURCE_MB = config.MAX_FILE_SIZE_MB * 4
     config.IMPORT_ARCHIVE_MAX_MB = config.MAX_FILE_SIZE_MB * 20
     config.IMPORT_MAX_FILES = 500
     config.IMPORT_MAX_UNCOMPRESSED_MB = 1024
@@ -257,13 +259,16 @@ def patch_upstream(monkeypatch):
         api_url,
         api_key,
         payload,
-        image_bytes,
+        image_path,
         image_filename,
         image_content_type,
         api_preset_name=None,
         progress=None,
         socks5_proxy=None,
     ):
+        source_path = Path(image_path)
+        assert source_path.exists()
+        assert source_path.read_bytes() == PNG_BYTES
         if progress:
             progress("building_edit_form", "Building multipart edit request")
             progress("uploading_edit_image", "Uploading source image and edit parameters")
@@ -687,13 +692,14 @@ def test_socks5_proxy_only_flows_to_generation_and_edit(client, monkeypatch):
         api_url,
         api_key,
         payload,
-        image_bytes,
+        image_path,
         image_filename,
         image_content_type,
         api_preset_name=None,
         progress=None,
         socks5_proxy=None,
     ):
+        assert Path(image_path).exists()
         seen["edit_proxy"] = socks5_proxy or ""
         image_id = storage.generate_image_id()
         filename = f"{image_id}.png"
@@ -959,6 +965,191 @@ def test_edit_upload_and_gallery_flow(client):
     assert edit_gallery.status_code == 202
     gallery_job = _wait_for_job(client, edit_gallery.json()["job_id"])
     assert gallery_job["status"] == "success"
+
+
+def test_edit_source_temp_path_is_cleaned_after_success(client, monkeypatch):
+    seen: dict[str, Path] = {}
+
+    async def fake_edit_api(
+        api_url,
+        api_key,
+        payload,
+        image_path,
+        image_filename,
+        image_content_type,
+        api_preset_name=None,
+        progress=None,
+        socks5_proxy=None,
+    ):
+        source_path = Path(image_path)
+        seen["path"] = source_path
+        assert source_path.exists()
+        assert source_path.read_bytes() == PNG_BYTES
+        image_id = storage.generate_image_id()
+        filename = f"{image_id}.png"
+        entry = await storage.add_to_gallery_async(
+            image_bytes=PNG_BYTES,
+            image_id=image_id,
+            prompt=payload.prompt,
+            size=payload.size,
+            filename=filename,
+            metadata={"api_path": "/v1/images/edits", "api_preset_name": api_preset_name},
+        )
+        return [entry]
+
+    monkeypatch.setattr(backend_main.proxy, "call_image_edit_api", fake_edit_api)
+
+    edit = client.post(
+        "/api/edits",
+        data={
+            "prompt": "cleanup source",
+            "model": "gpt-image-2",
+            "n": 1,
+            "quality": "auto",
+            "output_format": "png",
+        },
+        files={"image": ("input.png", PNG_BYTES, "image/png")},
+    )
+
+    assert edit.status_code == 202
+    assert _wait_for_job(client, edit.json()["job_id"])["status"] == "success"
+    assert "path" in seen
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if not seen["path"].exists() and jobs.get_pending_edit_source_bytes() == 0:
+            break
+        time.sleep(0.05)
+
+    assert not seen["path"].exists()
+    assert jobs.get_pending_edit_source_bytes() == 0
+
+
+def test_cancelled_edit_job_cleans_temp_source(tmp_path, monkeypatch):
+    _configure_runtime(tmp_path)
+    config.MAX_ACTIVE_GENERATE_JOBS = 1
+    config.MAX_QUEUED_GENERATE_JOBS = 20
+    seen: dict[str, Path] = {}
+    started = threading.Event()
+    release_event = threading.Event()
+
+    async def blocking_edit_api(
+        api_url,
+        api_key,
+        payload,
+        image_path,
+        image_filename,
+        image_content_type,
+        api_preset_name=None,
+        progress=None,
+        socks5_proxy=None,
+    ):
+        source_path = Path(image_path)
+        seen["path"] = source_path
+        assert source_path.exists()
+        started.set()
+        await asyncio.to_thread(release_event.wait)
+        raise AssertionError("cancelled edit should not finish upstream call")
+
+    monkeypatch.setattr(backend_main.proxy, "call_image_edit_api", blocking_edit_api)
+
+    with TestClient(backend_main.app) as test_client:
+        edit = test_client.post(
+            "/api/edits",
+            data={
+                "prompt": "cancel source",
+                "model": "gpt-image-2",
+                "n": 1,
+                "quality": "auto",
+                "output_format": "png",
+            },
+            files={"image": ("input.png", PNG_BYTES, "image/png")},
+        )
+
+        assert edit.status_code == 202
+        assert started.wait(timeout=5)
+        assert jobs.get_pending_edit_source_bytes() == len(PNG_BYTES)
+
+        cancelled = test_client.delete(f"/api/generate/{edit.json()['job_id']}")
+        assert cancelled.status_code == 200
+        release_event.set()
+
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if not seen["path"].exists() and jobs.get_pending_edit_source_bytes() == 0:
+                break
+            time.sleep(0.05)
+
+        assert not seen["path"].exists()
+        assert jobs.get_pending_edit_source_bytes() == 0
+
+
+def test_edit_queue_capacity_uses_pending_source_bytes(tmp_path, monkeypatch):
+    _configure_runtime(tmp_path)
+    config.MAX_ACTIVE_GENERATE_JOBS = 1
+    config.MAX_QUEUED_GENERATE_JOBS = 20
+    config.MAX_PENDING_EDIT_SOURCE_MB = 1
+    release_event = threading.Event()
+    large_png = PNG_BYTES + (b"\0" * (600 * 1024))
+
+    async def blocking_edit_api(
+        api_url,
+        api_key,
+        payload,
+        image_path,
+        image_filename,
+        image_content_type,
+        api_preset_name=None,
+        progress=None,
+        socks5_proxy=None,
+    ):
+        assert Path(image_path).exists()
+        await asyncio.to_thread(release_event.wait)
+        image_id = storage.generate_image_id()
+        filename = f"{image_id}.png"
+        entry = await storage.add_to_gallery_async(
+            image_bytes=PNG_BYTES,
+            image_id=image_id,
+            prompt=payload.prompt,
+            size=payload.size,
+            filename=filename,
+            metadata={"api_path": "/v1/images/edits", "api_preset_name": api_preset_name},
+        )
+        return [entry]
+
+    monkeypatch.setattr(backend_main.proxy, "call_image_edit_api", blocking_edit_api)
+
+    with TestClient(backend_main.app) as test_client:
+        first = test_client.post(
+            "/api/edits",
+            data={
+                "prompt": "first large source",
+                "model": "gpt-image-2",
+                "n": 1,
+                "quality": "auto",
+                "output_format": "png",
+            },
+            files={"image": ("input.png", large_png, "image/png")},
+        )
+        second = test_client.post(
+            "/api/edits",
+            data={
+                "prompt": "second large source",
+                "model": "gpt-image-2",
+                "n": 1,
+                "quality": "auto",
+                "output_format": "png",
+            },
+            files={"image": ("input.png", large_png, "image/png")},
+        )
+
+        assert first.status_code == 202
+        assert second.status_code == 429
+        assert second.json()["detail"] == "Edit source queue is full"
+
+        release_event.set()
+        assert _wait_for_job(test_client, first.json()["job_id"])["status"] == "success"
+        assert jobs.get_pending_edit_source_bytes() == 0
 
 
 def test_gallery_image_download_and_zip(client):
