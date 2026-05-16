@@ -3,13 +3,22 @@
   import type { PromptFormState } from '$lib/stores/preview';
 
   export let form: PromptFormState;
-  export let responsesMode = false;
+  export let apiPath = '/v1/images/generations';
   export let loading = false;
   export let onGenerate: () => void = () => {};
   export let onEdit: () => void = () => {};
   export let onOpenSize: () => void = () => {};
 
   $: promptLen = form.prompt.length;
+  $: promptOnlyMode = apiPath === '/v1/responses' || apiPath === '/v1/chat/completions';
+  $: modeLabel = apiPath === '/v1/chat/completions' ? $t.promptForm.chatCompletionsMode : $t.promptForm.responsesMode;
+  $: disabledModeLabel =
+    apiPath === '/v1/chat/completions' ? $t.promptForm.disabledForChatCompletions : $t.promptForm.disabledForResponses;
+  $: compressionPlaceholder = promptOnlyMode
+    ? disabledModeLabel
+    : form.outputFormat === 'png'
+      ? $t.promptForm.disabledForPng
+      : '0-100';
 
   function clampQuantity() {
     form = { ...form, quantity: Math.min(Math.max(Number(form.quantity) || 1, 1), 10) };
@@ -29,8 +38,8 @@
       <h2 class="text-sm font-semibold text-zinc-100">{$t.promptForm.title}</h2>
       <p class="mt-1 text-xs text-zinc-500">{$t.promptForm.subtitle}</p>
     </div>
-    {#if responsesMode}
-      <span class="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-200">{$t.promptForm.responsesMode}</span>
+    {#if promptOnlyMode}
+      <span class="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-200">{modeLabel}</span>
     {/if}
   </div>
 
@@ -53,17 +62,17 @@
       <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.common.size}</span>
       <button
         type="button"
-        disabled={responsesMode || loading}
+        disabled={promptOnlyMode || loading}
         class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-left font-mono text-sm text-zinc-100 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
         on:click={onOpenSize}
       >
-        {responsesMode ? $t.promptForm.disabledForResponses : form.size}
+        {promptOnlyMode ? disabledModeLabel : form.size}
       </button>
     </label>
 
     <label class="block">
       <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.promptForm.quality}</span>
-      <select bind:value={form.quality} disabled={responsesMode || loading} class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50">
+      <select bind:value={form.quality} disabled={promptOnlyMode || loading} class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50">
         <option value="auto">auto</option>
         <option value="low">low</option>
         <option value="medium">medium</option>
@@ -73,12 +82,12 @@
 
     <label class="block">
       <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.promptForm.quantity}</span>
-      <input bind:value={form.quantity} disabled={responsesMode || loading} type="number" min="1" max="10" class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50" on:input={clampQuantity} />
+      <input bind:value={form.quantity} disabled={promptOnlyMode || loading} type="number" min="1" max="10" class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50" on:input={clampQuantity} />
     </label>
 
     <label class="block">
       <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.promptForm.format}</span>
-      <select bind:value={form.outputFormat} disabled={responsesMode || loading} class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50">
+      <select bind:value={form.outputFormat} disabled={promptOnlyMode || loading} class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50">
         <option value="png">png</option>
         <option value="jpeg">jpeg</option>
         <option value="webp">webp</option>
@@ -87,12 +96,12 @@
 
     <label class="block">
       <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.promptForm.compression}</span>
-      <input bind:value={form.outputCompression} disabled={responsesMode || loading || form.outputFormat === 'png'} type="number" min="0" max="100" placeholder={form.outputFormat === 'png' ? $t.promptForm.disabledForPng : '0-100'} class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50" on:input={clampCompression} />
+      <input bind:value={form.outputCompression} disabled={promptOnlyMode || loading || form.outputFormat === 'png'} type="number" min="0" max="100" placeholder={compressionPlaceholder} class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50" on:input={clampCompression} />
     </label>
 
     <label class="block">
       <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.promptForm.responseFormat}</span>
-      <select bind:value={form.responseFormat} disabled={responsesMode || loading} class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50">
+      <select bind:value={form.responseFormat} disabled={promptOnlyMode || loading} class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50">
         <option value="">{$t.promptForm.defaultResponseFormat}</option>
         <option value="url">url</option>
         <option value="b64_json">b64_json</option>

@@ -1,4 +1,4 @@
-export type ApiPath = '/v1/images/generations' | '/v1/responses';
+export type ApiPath = '/v1/images/generations' | '/v1/responses' | '/v1/chat/completions';
 export type ApiKeySource = 'empty' | 'stored' | 'env';
 export type PresetHealthStatus = 'ok' | 'warning' | 'error';
 

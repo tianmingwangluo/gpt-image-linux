@@ -21,7 +21,7 @@ from ..presets import (
 )
 from ...core import settings as config
 from ...core import validators as ssrf
-from ...core.api_paths import ALLOWED_API_PATHS, normalize_api_path
+from ...core.api_paths import ALLOWED_API_PATHS, build_upstream_url, normalize_api_path
 from ...integrations import upstream_client as proxy
 from ...schemas.models import (
     PresetCreateRequest,
@@ -167,7 +167,7 @@ def validate_health_api_url(api_url: str, api_path: str, checks: list[dict]) -> 
 
     try:
         ssrf.validate_upstream_url(
-            f"{api_url.rstrip('/')}{api_path}",
+            build_upstream_url(api_url, api_path),
             config.UPSTREAM_HOST_ALLOWLIST,
         )
     except ValueError as e:

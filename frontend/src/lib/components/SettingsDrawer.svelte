@@ -156,6 +156,7 @@
             <select bind:value={apiPath} class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none">
               <option value="/v1/images/generations">/v1/images/generations</option>
               <option value="/v1/responses">/v1/responses</option>
+              <option value="/v1/chat/completions">/v1/chat/completions</option>
             </select>
           </label>
           <label class="block">

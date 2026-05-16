@@ -2,12 +2,18 @@ import aiohttp
 import asyncio
 import base64
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urljoin
 
 from ..core import settings as config
-from ..core.api_paths import normalize_api_path
+from ..core.api_paths import (
+    CHAT_COMPLETIONS_API_PATH,
+    RESPONSES_API_PATH,
+    build_upstream_url,
+    normalize_api_path,
+)
 from ..core import validators as ssrf
 from ..repositories import storage
 from ..schemas.models import EditRequest, GenerateRequest
@@ -28,6 +34,25 @@ OUTPUT_FORMATS = {
     "jpeg": {"extension": "jpg", "media_type": "image/jpeg"},
     "webp": {"extension": "webp", "media_type": "image/webp"},
 }
+DETECTED_FORMAT_EXTENSIONS = {
+    "avif": "avif",
+    "bmp": "bmp",
+    "gif": "gif",
+    "heif": "heif",
+    "ico": "ico",
+    "jpeg": "jpg",
+    "png": "png",
+    "tiff": "tiff",
+    "webp": "webp",
+}
+DATA_IMAGE_URL_RE = re.compile(
+    r"data:image/(?:png|jpe?g|webp|gif|avif|bmp);base64,(?P<data>[A-Za-z0-9+/=\s]+)",
+    re.IGNORECASE,
+)
+MARKDOWN_IMAGE_RE = re.compile(
+    r"!\[[^\]]*\]\((?P<target><[^>]+>|[^\s)]+)(?:\s+[\"'][^\"']*[\"'])?\)"
+)
+HTTP_IMAGE_URL_RE = re.compile(r"https?://[^\s<>'\")]+")
 
 
 UPSTREAM_TIMEOUT = aiohttp.ClientTimeout(
@@ -107,6 +132,166 @@ def extract_response_image_results(result: dict[str, Any]) -> list[dict[str, str
             image_results.append(image)
 
     return image_results
+
+
+def build_chat_completions_request_data(payload: GenerateRequest) -> dict[str, Any]:
+    return {
+        "model": payload.model,
+        "messages": [{"role": "user", "content": payload.prompt}],
+        "stream": False,
+    }
+
+
+def parse_sse_events(response_text: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    data_lines: list[str] = []
+
+    def flush_data_lines():
+        if not data_lines:
+            return
+        data = "\n".join(data_lines).strip()
+        data_lines.clear()
+        if not data or data == "[DONE]":
+            return
+        try:
+            events.append(json.loads(data))
+        except json.JSONDecodeError as e:
+            raise UpstreamApiError(f"Upstream returned malformed SSE JSON: {data[:200]}") from e
+
+    for raw_line in response_text.splitlines():
+        line = raw_line.rstrip("\r")
+        if not line:
+            flush_data_lines()
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].strip())
+
+    flush_data_lines()
+    return events
+
+
+def append_unique_image_result(
+    images: list[dict[str, str]],
+    seen: set[tuple[str, str]],
+    image: dict[str, str] | None,
+) -> None:
+    if not image:
+        return
+    key_name = "url" if image.get("url") else "b64_json"
+    key_value = image.get(key_name, "")
+    if not key_value:
+        return
+    dedupe_key = (key_name, key_value)
+    if dedupe_key in seen:
+        return
+    seen.add(dedupe_key)
+    images.append(image)
+
+
+def normalize_chat_image_reference(value: str) -> dict[str, str] | None:
+    text = value.strip().strip("<>")
+    if not text:
+        return None
+
+    data_url_match = DATA_IMAGE_URL_RE.fullmatch(text)
+    if data_url_match:
+        return {"b64_json": re.sub(r"\s+", "", data_url_match.group("data"))}
+
+    if text.startswith(("http://", "https://")):
+        return {"url": text}
+
+    return None
+
+
+def extract_chat_image_references_from_text(text: str) -> list[dict[str, str]]:
+    images: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for match in DATA_IMAGE_URL_RE.finditer(text):
+        append_unique_image_result(
+            images,
+            seen,
+            {"b64_json": re.sub(r"\s+", "", match.group("data"))},
+        )
+
+    for match in MARKDOWN_IMAGE_RE.finditer(text):
+        append_unique_image_result(
+            images,
+            seen,
+            normalize_chat_image_reference(match.group("target")),
+        )
+
+    for match in HTTP_IMAGE_URL_RE.finditer(text):
+        append_unique_image_result(
+            images,
+            seen,
+            normalize_chat_image_reference(match.group(0)),
+        )
+
+    return images
+
+
+def collect_chat_completion_text(result: dict[str, Any]) -> list[str]:
+    events = result.get("_sse_events")
+    items = events if isinstance(events, list) else [result]
+    chunks_by_choice: dict[int, list[str]] = {}
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for choice in item.get("choices", []):
+            if not isinstance(choice, dict):
+                continue
+            index = int(choice.get("index") or 0)
+            chunks = chunks_by_choice.setdefault(index, [])
+            for key in ("message", "delta"):
+                container = choice.get(key)
+                if not isinstance(container, dict):
+                    continue
+                content = container.get("content")
+                if isinstance(content, str):
+                    chunks.append(content)
+
+    return ["".join(chunks) for chunks in chunks_by_choice.values() if chunks]
+
+
+def collect_chat_image_results(
+    value: Any,
+    images: list[dict[str, str]],
+    seen: set[tuple[str, str]],
+    key_hint: str = "",
+) -> None:
+    if isinstance(value, str):
+        if key_hint in {"url", "image_url"}:
+            append_unique_image_result(images, seen, normalize_chat_image_reference(value))
+            return
+        if key_hint in {"b64_json", "base64"}:
+            append_unique_image_result(images, seen, {"b64_json": value.strip()})
+            return
+        for image in extract_chat_image_references_from_text(value):
+            append_unique_image_result(images, seen, image)
+        return
+
+    if isinstance(value, list):
+        for item in value:
+            collect_chat_image_results(item, images, seen, key_hint)
+        return
+
+    if isinstance(value, dict):
+        for key, child in value.items():
+            collect_chat_image_results(child, images, seen, str(key))
+
+
+def extract_chat_completion_image_results(result: dict[str, Any]) -> list[dict[str, str]]:
+    images: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for text in collect_chat_completion_text(result):
+        for image in extract_chat_image_references_from_text(text):
+            append_unique_image_result(images, seen, image)
+
+    collect_chat_image_results(result, images, seen)
+    return images
 
 
 def get_image_transfer_stage(image_data: dict) -> tuple[str, str]:
@@ -269,9 +454,17 @@ async def save_gallery_entries_from_upstream_data(
                     f"Image too large: {len(image_bytes)} bytes (max {max_bytes})"
                 )
 
+            detected_format = storage.detect_image_format(image_bytes)
+            detected_extension = DETECTED_FORMAT_EXTENSIONS.get(
+                detected_format or "",
+                format_extension,
+            )
             image_id = storage.generate_image_id()
-            filename = f"{image_id}.{format_extension}"
+            filename = f"{image_id}.{detected_extension}"
             validate_generated_image_bytes(image_bytes, filename)
+            entry_metadata = {**gallery_metadata}
+            if detected_format:
+                entry_metadata["output_format"] = detected_format
 
             if progress:
                 progress(
@@ -284,7 +477,7 @@ async def save_gallery_entries_from_upstream_data(
                 prompt=payload.prompt,
                 size=payload.size,
                 filename=filename,
-                metadata=gallery_metadata,
+                metadata=entry_metadata,
             )
             entries.append(entry)
         finally:
@@ -313,7 +506,7 @@ async def probe_upstream_endpoint(
     api_path: str,
     api_key: str = "",
 ) -> dict[str, Any]:
-    upstream_url = f"{api_url.rstrip('/')}{api_path}"
+    upstream_url = build_upstream_url(api_url, api_path)
     ssrf.validate_upstream_url(upstream_url, config.UPSTREAM_HOST_ALLOWLIST)
 
     headers = {"User-Agent": "opencode"}
@@ -428,6 +621,47 @@ async def parse_upstream_json_response(
     return result, response_text
 
 
+async def parse_upstream_chat_completion_response(
+    resp: aiohttp.ClientResponse,
+    api_path: str,
+    progress: ProgressCallback | None,
+) -> tuple[dict[str, Any], str]:
+    status = resp.status
+    response_text = await resp.text()
+    if progress:
+        progress("received_api_response", "Received upstream API response")
+
+    content_type = resp.headers.get("Content-Type", "")
+    is_json_response = "application/json" in content_type
+    is_sse_response = "text/event-stream" in content_type or response_text.lstrip().startswith("data:")
+
+    if status >= 400:
+        raise_upstream_error(status, response_text, is_json_response, api_path)
+
+    if progress:
+        progress("parsing_json_response", "Parsing upstream response")
+
+    if is_json_response:
+        try:
+            return json.loads(response_text), response_text
+        except json.JSONDecodeError as e:
+            raise UpstreamApiError(
+                f"Upstream returned non-JSON ({status}): {response_text[:200]}"
+            ) from e
+
+    if is_sse_response:
+        events = parse_sse_events(response_text)
+        if not events:
+            raise UpstreamApiError(
+                f"No SSE chat completion events in upstream response: {response_text[:200]}"
+            )
+        return {"_sse_events": events}, response_text
+
+    raise UpstreamApiError(
+        f"Upstream returned unsupported content-type ({status}): {response_text[:200]}"
+    )
+
+
 async def call_image_generation_api(
     api_url: str,
     api_key: str,
@@ -438,7 +672,7 @@ async def call_image_generation_api(
     socks5_proxy: str | None = None,
 ) -> list[storage.GalleryEntry]:
     api_path = normalize_api_path(api_path)
-    upstream_url = f"{api_url.rstrip('/')}{api_path}"
+    upstream_url = build_upstream_url(api_url, api_path)
 
     ssrf.validate_upstream_url(upstream_url, config.UPSTREAM_HOST_ALLOWLIST)
 
@@ -448,10 +682,17 @@ async def call_image_generation_api(
         "User-Agent": "opencode",
     }
 
-    if api_path == "/v1/responses":
+    if api_path == RESPONSES_API_PATH:
         if progress:
             progress("building_responses_payload", "Building Responses API payload")
         request_data = build_responses_request_data(payload)
+    elif api_path == CHAT_COMPLETIONS_API_PATH:
+        if progress:
+            progress(
+                "building_chat_completions_payload",
+                "Building Chat Completions API payload",
+            )
+        request_data = build_chat_completions_request_data(payload)
     else:
         if progress:
             progress("building_generation_payload", "Building image generation payload")
@@ -475,17 +716,29 @@ async def call_image_generation_api(
             ) as resp:
                 if not socks5_proxy:
                     ssrf.validate_response_peer_ip(resp, "Upstream API")
-                result, response_text = await parse_upstream_json_response(
-                    resp, api_path, progress
-                )
+                if api_path == CHAT_COMPLETIONS_API_PATH:
+                    result, response_text = await parse_upstream_chat_completion_response(
+                        resp, api_path, progress
+                    )
+                else:
+                    result, response_text = await parse_upstream_json_response(
+                        resp, api_path, progress
+                    )
 
-                if api_path == "/v1/responses":
+                if api_path == RESPONSES_API_PATH:
                     if progress:
                         progress(
                             "extracting_response_image_output",
                             "Extracting image_generation_call output",
                         )
                     data = extract_response_image_results(result)
+                elif api_path == CHAT_COMPLETIONS_API_PATH:
+                    if progress:
+                        progress(
+                            "extracting_chat_completion_image_output",
+                            "Extracting Chat Completions image output",
+                        )
+                    data = extract_chat_completion_image_results(result)
                 else:
                     if progress:
                         progress("extracting_generation_data", "Extracting image data array")
@@ -520,7 +773,7 @@ async def call_image_edit_api(
     socks5_proxy: str | None = None,
 ) -> list[storage.GalleryEntry]:
     api_path = "/v1/images/edits"
-    upstream_url = f"{api_url.rstrip('/')}{api_path}"
+    upstream_url = build_upstream_url(api_url, api_path)
 
     ssrf.validate_upstream_url(upstream_url, config.UPSTREAM_HOST_ALLOWLIST)
 

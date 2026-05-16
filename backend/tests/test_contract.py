@@ -19,6 +19,7 @@ from backend.app.repositories import storage
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4//8/AwAI/AL+X1N6AAAAAElFTkSuQmCC"
 )
+JPEG_BYTES = b"\xff\xd8\xff\xd9"
 
 
 def _configure_runtime(tmp_path: Path, *, access_key: str = "", allow_unauthenticated: bool = True):
@@ -522,9 +523,42 @@ def test_settings_and_presets(client):
     assert updated.status_code == 200
     assert updated.json()["api_path"] == "/v1/responses"
 
+    chat_updated = client.post(
+        "/api/settings",
+        json={
+            "active_preset_id": body["active_preset_id"],
+            "preset_name": "Primary",
+            "api_url": "https://api.example.com",
+            "api_key": "new-key",
+            "api_path": "/v1/chat/completions",
+        },
+    )
+    assert chat_updated.status_code == 200
+    assert chat_updated.json()["api_path"] == "/v1/chat/completions"
+
     created = client.post("/api/settings/presets", json={"name": "Alt"})
     assert created.status_code == 200
     assert len(created.json()["presets"]) == 2
+
+
+def test_build_upstream_url_accepts_openai_style_v1_base():
+    from backend.app.core.api_paths import build_upstream_url
+
+    assert (
+        build_upstream_url("https://api.example.com", "/v1/chat/completions")
+        == "https://api.example.com/v1/chat/completions"
+    )
+    assert (
+        build_upstream_url("https://api.example.com/v1", "/v1/chat/completions")
+        == "https://api.example.com/v1/chat/completions"
+    )
+    assert (
+        build_upstream_url(
+            "https://api.example.com/v1/chat/completions",
+            "/v1/chat/completions",
+        )
+        == "https://api.example.com/v1/chat/completions"
+    )
 
 
 def test_settings_global_socks5_proxy_save_mask_preserve_and_clear(client):
@@ -1610,6 +1644,90 @@ def test_upstream_returned_image_url_download_stays_direct(tmp_path, monkeypatch
     assert session_events[1] == ("get", "", "https://example.com/generated.png")
 
 
+def test_chat_completions_sse_markdown_image_url_is_saved(tmp_path, monkeypatch):
+    _configure_runtime(tmp_path)
+    import importlib
+    from backend.app.integrations import upstream_client as upstream_client_module
+    from backend.app.schemas.models import GenerateRequest
+
+    upstream_client = importlib.reload(upstream_client_module)
+    session_events: list[tuple[str, str, dict | None]] = []
+
+    class FakeSseResponse:
+        status = 200
+        headers = {"Content-Type": "text/event-stream"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return (
+                'data: {"choices":[{"index":0,"delta":{"role":"assistant",'
+                '"reasoning_content":"image generating"}}]}\n\n'
+                'data: {"choices":[{"index":0,"delta":{"role":"assistant",'
+                '"content":"![image](https://example.com/generated.jpg)"}}]}\n\n'
+                "data: [DONE]\n\n"
+            )
+
+    class FakeApiSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, **kwargs):
+            session_events.append(("post", url, kwargs.get("json")))
+            return FakeSseResponse()
+
+    class FakeDownloadSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, **kwargs):
+            session_events.append(("get", url, None))
+            return _FakeResponse(200, {}, [JPEG_BYTES], peer_ip="93.184.216.34")
+
+    sessions = [FakeApiSession(), FakeDownloadSession()]
+
+    def fake_create_client_session(timeout, socks5_proxy=None):
+        return sessions.pop(0)
+
+    monkeypatch.setattr(upstream_client, "create_client_session", fake_create_client_session)
+
+    entries = asyncio.run(
+        upstream_client.call_image_generation_api(
+            "https://api.example.com",
+            "key",
+            "/v1/chat/completions",
+            GenerateRequest(
+                prompt="draw a red square",
+                model="grok-imagine-image-lite",
+            ),
+        )
+    )
+
+    assert entries
+    assert entries[0].filename.endswith(".jpg")
+    assert entries[0].output_format == "jpeg"
+    assert session_events[0] == (
+        "post",
+        "https://api.example.com/v1/chat/completions",
+        {
+            "model": "grok-imagine-image-lite",
+            "messages": [{"role": "user", "content": "draw a red square"}],
+            "stream": False,
+        },
+    )
+    assert session_events[1] == ("get", "https://example.com/generated.jpg", None)
+
+
 def test_running_progress_persists_only_terminal_states(tmp_path, monkeypatch):
     _configure_runtime(tmp_path)
     upserted: list[dict] = []
@@ -1691,3 +1809,22 @@ def test_responses_request_uses_default_responses_model(tmp_path):
     config.DEFAULT_RESPONSES_MODEL = ""
     fallback = upstream_client_module.build_responses_request_data(payload)
     assert fallback["model"] == "gpt-image-2"
+
+
+def test_chat_completions_request_uses_prompt_and_model(tmp_path):
+    _configure_runtime(tmp_path)
+    from backend.app.integrations import upstream_client as upstream_client_module
+    from backend.app.schemas.models import GenerateRequest
+
+    payload = GenerateRequest(
+        prompt="hello",
+        model="grok-imagine-image-lite",
+        size="1024x1024",
+    )
+    request_data = upstream_client_module.build_chat_completions_request_data(payload)
+
+    assert request_data == {
+        "model": "grok-imagine-image-lite",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }

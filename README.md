@@ -252,7 +252,7 @@ curl http://localhost:9090/health
 
 ## API paths
 
-The panel supports these upstream paths:
+The panel supports these upstream paths. The API base URL may either omit or include `/v1`; for example, both `https://api.example.com` and `https://api.example.com/v1` are accepted.
 
 ### `/v1/images/generations`
 
@@ -264,6 +264,14 @@ The panel supports these upstream paths:
 - sends generation requests to the Responses API
 - sends only `prompt` and `model` in the upstream request body
 - reads base64 image data from `output[]` items of type `image_generation_call`
+- size, quality, format, compression, quantity, and response format controls are disabled in the UI for this path
+
+### `/v1/chat/completions`
+
+- sends OpenAI Chat Completions-compatible generation requests
+- sends only `model`, `messages`, and `stream: false` in the upstream request body
+- supports `grok-imagine-image-lite` and other image models that return image URLs or base64 data through chat completion messages
+- reads image output from JSON chat completions or `data:` SSE chunks, including Markdown image links such as `![image](https://...)`
 - size, quality, format, compression, quantity, and response format controls are disabled in the UI for this path
 
 ### `/v1/images/edits`
@@ -314,9 +322,9 @@ The panel supports these upstream paths:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEFAULT_API_URL` | empty | Pre-fill API base URL |
+| `DEFAULT_API_URL` | empty | Pre-fill API base URL; may omit or include `/v1` |
 | `DEFAULT_API_KEY` | empty | Pre-fill API key; may be a literal key or an env ref such as `${OPENAI_API_KEY}` |
-| `DEFAULT_API_PATH` | `/v1/images/generations` | Default upstream path |
+| `DEFAULT_API_PATH` | `/v1/images/generations` | Default upstream path; supported values are `/v1/images/generations`, `/v1/responses`, and `/v1/chat/completions` |
 | `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | Top-level model used when calling `/v1/responses` |
 | `DEFAULT_UPSTREAM_SOCKS5_PROXY` | empty | Optional default global SOCKS5 proxy for generation/edit upstream API calls |
 | `APP_VERSION` | `VERSION` file | Override the app version shown in the UI and returned by `/api/version` |
@@ -679,7 +687,7 @@ curl http://localhost:9090/health
 
 ## 支持的 API Path
 
-面板支持以下上游路径：
+面板支持以下上游路径。API Base URL 可以不带 `/v1`，也可以带 `/v1`；例如 `https://api.example.com` 和 `https://api.example.com/v1` 都可以。
 
 ### `/v1/images/generations`
 
@@ -691,6 +699,14 @@ curl http://localhost:9090/health
 - 向 Responses API 发送生成请求
 - 上游请求体只发送 `prompt` 和 `model`
 - 从 `output[]` 中类型为 `image_generation_call` 的项目读取 base64 图片数据
+- 选择该路径时，界面中的尺寸、质量、格式、压缩率、数量和 response format 控件会被禁用
+
+### `/v1/chat/completions`
+
+- 发送兼容 OpenAI Chat Completions 的生成请求
+- 上游请求体只发送 `model`、`messages` 和 `stream: false`
+- 支持 `grok-imagine-image-lite` 以及其他通过 chat completion 消息返回图片 URL 或 base64 数据的图像模型
+- 可从 JSON chat completions 或 `data:` SSE chunk 中读取图片输出，包括 `![image](https://...)` 这类 Markdown 图片链接
 - 选择该路径时，界面中的尺寸、质量、格式、压缩率、数量和 response format 控件会被禁用
 
 ### `/v1/images/edits`
@@ -741,9 +757,9 @@ curl http://localhost:9090/health
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DEFAULT_API_URL` | 空 | 预填 API Base URL |
+| `DEFAULT_API_URL` | 空 | 预填 API Base URL；可以不带或带 `/v1` |
 | `DEFAULT_API_KEY` | 空 | 预填 API Key；可以是真实 key，也可以是 `${OPENAI_API_KEY}` 这类环境变量引用 |
-| `DEFAULT_API_PATH` | `/v1/images/generations` | 默认上游路径 |
+| `DEFAULT_API_PATH` | `/v1/images/generations` | 默认上游路径；支持 `/v1/images/generations`、`/v1/responses` 和 `/v1/chat/completions` |
 | `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | 调用 `/v1/responses` 时使用的顶层模型 |
 | `DEFAULT_UPSTREAM_SOCKS5_PROXY` | 空 | 可选的全局 SOCKS5 代理默认值，仅用于生成/编辑的上游 API 请求 |
 | `APP_VERSION` | `VERSION` 文件 | 覆盖界面显示和 `/api/version` 返回的当前应用版本 |

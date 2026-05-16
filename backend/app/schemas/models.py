@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 from ..core.validators import normalize_socks5_proxy_url
 
-ApiPath = Literal["/v1/images/generations", "/v1/responses"]
+ApiPath = Literal["/v1/images/generations", "/v1/responses", "/v1/chat/completions"]
 ApiKeySource = Literal["empty", "stored", "env"]
 PresetHealthStatus = Literal["ok", "warning", "error"]
 
