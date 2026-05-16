@@ -98,6 +98,7 @@ async def get_gallery_handler(
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
     favorite: bool | None = Query(default=None),
+    include_total_bytes: bool = Query(default=False),
 ):
     filters = build_gallery_filters(
         prompt=prompt,
@@ -108,22 +109,23 @@ async def get_gallery_handler(
         date_to=date_to,
         favorite=favorite,
     )
-    total = storage.get_gallery_count(filters=filters)
-    total_bytes = storage.get_gallery_total_bytes(filters=filters)
-    total_pages = max((total + page_size - 1) // page_size, 1)
-    page = min(page, total_pages)
-    offset = (page - 1) * page_size
-
-    return GalleryResponse(
-        total=total,
-        total_bytes=total_bytes,
+    gallery_page = storage.get_gallery_page(
         page=page,
         page_size=page_size,
-        total_pages=total_pages,
-        has_prev=page > 1,
-        has_next=page < total_pages,
-        images=storage.get_gallery(limit=page_size, offset=offset, filters=filters),
-        filter_options=storage.get_gallery_filter_options(),
+        filters=filters,
+        include_total_bytes=include_total_bytes,
+    )
+
+    return GalleryResponse(
+        total=gallery_page.total,
+        total_bytes=gallery_page.total_bytes,
+        page=gallery_page.page,
+        page_size=gallery_page.page_size,
+        total_pages=gallery_page.total_pages,
+        has_prev=gallery_page.has_prev,
+        has_next=gallery_page.has_next,
+        images=gallery_page.images,
+        filter_options=gallery_page.filter_options,
     )
 
 

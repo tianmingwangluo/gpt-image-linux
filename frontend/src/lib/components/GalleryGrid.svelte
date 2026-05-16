@@ -10,6 +10,7 @@
   export let onFilter: (key: keyof GalleryFilters, value: string | boolean) => void = () => {};
   export let onResetFilters: () => void = () => {};
   export let onPage: (delta: number) => void = () => {};
+  export let onLoadStats: () => void = () => {};
   export let onFavorite: (image: GalleryEntry) => void = () => {};
   export let onDelete: (image: GalleryEntry) => void = () => {};
   export let onDeleteAll: () => void = () => {};
@@ -70,6 +71,10 @@
         {gallery?.total ? $t.gallery.imageCount(gallery.total) : $t.gallery.noImages}
         {#if gallery?.total_bytes}
           <span class="ml-2">{formatBytes(gallery.total_bytes)}</span>
+        {:else if gallery?.total}
+          <button type="button" class="ml-2 text-xs font-medium text-zinc-400 hover:text-zinc-200" on:click={onLoadStats}>
+            {$t.gallery.showSize}
+          </button>
         {/if}
       </p>
     </div>

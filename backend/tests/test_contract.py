@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import re
 import threading
 import time
@@ -971,7 +972,11 @@ def test_gallery_image_download_and_zip(client):
     gallery_data = gallery.json()
     assert gallery_data["images"][0]["bytes"] == len(PNG_BYTES)
     assert gallery_data["images"][0]["thumbnail_url"] == "/api/thumb/gallery-zip.png"
-    assert gallery_data["total_bytes"] == len(PNG_BYTES)
+    assert gallery_data["total_bytes"] == 0
+
+    gallery_stats = client.get("/api/gallery?include_total_bytes=true")
+    assert gallery_stats.status_code == 200
+    assert gallery_stats.json()["total_bytes"] == len(PNG_BYTES)
 
     image = client.get("/api/image/gallery-zip.png")
     assert image.status_code == 200
@@ -1062,7 +1067,18 @@ def test_gallery_total_bytes_backfills_legacy_entries_without_bytes(client):
 
     gallery = client.get("/api/gallery")
     assert gallery.status_code == 200
-    assert gallery.json()["total_bytes"] == len(PNG_BYTES)
+    assert gallery.json()["total_bytes"] == 0
+
+    with storage._connect() as conn:
+        row = conn.execute(
+            "SELECT bytes FROM gallery_entries WHERE id = ?",
+            ("legacy-bytes",),
+        ).fetchone()
+        assert row["bytes"] is None
+
+    gallery_stats = client.get("/api/gallery?include_total_bytes=true")
+    assert gallery_stats.status_code == 200
+    assert gallery_stats.json()["total_bytes"] == len(PNG_BYTES)
 
     with storage._connect() as conn:
         row = conn.execute(
@@ -1070,6 +1086,30 @@ def test_gallery_total_bytes_backfills_legacy_entries_without_bytes(client):
             ("legacy-bytes",),
         ).fetchone()
         assert row["bytes"] == len(PNG_BYTES)
+
+
+def test_gallery_prompt_search_uses_fts_and_short_like_fallback(client):
+    _fake_gallery_entry("fts-1", "alpha needle beta", "1024x1024", "fts-1.png")
+    _fake_gallery_entry("fts-2", "unrelated prompt", "1024x1024", "fts-2.png")
+
+    fts = client.get("/api/gallery", params={"prompt": "needle"})
+    assert fts.status_code == 200
+    assert [image["id"] for image in fts.json()["images"]] == ["fts-1"]
+
+    with storage._connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT rowid
+            FROM gallery_entries_fts
+            WHERE gallery_entries_fts MATCH ?
+            """,
+            ('"needle"',),
+        ).fetchall()
+        assert rows
+
+    short_fallback = client.get("/api/gallery", params={"prompt": "al"})
+    assert short_fallback.status_code == 200
+    assert [image["id"] for image in short_fallback.json()["images"]] == ["fts-1"]
 
 
 def test_gallery_batch_delete_only_selected_entries(client):
@@ -1112,6 +1152,29 @@ def test_gallery_batch_delete_preserves_shared_filename(client):
     assert second.status_code == 200
     assert second.json()["file_count"] == 1
     assert not storage.safe_image_path("shared.png").exists()
+
+
+def test_delete_all_gallery_commits_rows_when_file_delete_fails(client, monkeypatch, caplog):
+    _fake_gallery_entry("delete-all-1", "one", "1024x1024", "delete-all-1.png")
+    _fake_gallery_entry("delete-all-2", "two", "1024x1024", "delete-all-2.png")
+    original_delete = storage._delete_image_unlocked
+
+    def flaky_delete(filename: str):
+        if filename == "delete-all-1.png":
+            raise OSError("locked")
+        return original_delete(filename)
+
+    monkeypatch.setattr(storage, "_delete_image_unlocked", flaky_delete)
+
+    with caplog.at_level(logging.WARNING):
+        total, deleted_files = storage.delete_all_gallery_images()
+
+    assert total == 2
+    assert deleted_files == 1
+    assert storage.get_gallery_count() == 0
+    assert storage.safe_image_path("delete-all-1.png").exists()
+    assert not storage.safe_image_path("delete-all-2.png").exists()
+    assert "Failed to delete gallery image file delete-all-1.png" in caplog.text
 
 
 def test_gallery_batch_favorite_and_download(client):
@@ -1789,7 +1852,7 @@ def test_validation_422_and_global_500(tmp_path, monkeypatch):
         def boom(*args, **kwargs):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(backend_main.storage, "get_gallery", boom)
+        monkeypatch.setattr(backend_main.storage, "get_gallery_page", boom)
         broken = client.get("/api/gallery")
         assert broken.status_code == 500
         assert broken.json()["detail"] == "Internal Server Error"

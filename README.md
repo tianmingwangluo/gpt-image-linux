@@ -33,7 +33,7 @@ Key characteristics:
 - preview + job history with SSE progress, `completed_at`, elapsed time, loading states, cancel for queued/running jobs, and reuse/retry from persisted history
 - shared queue and concurrency limits for generation/edit jobs
 - optional per-job `webhook_url` with HTTPS-only validation, SSRF checks, signing, and retry
-- gallery with filters (prompt, model, preset, size, date range, favorite), lightbox, “Edit this image”, download, delete/delete-all, prompt/image-url copy, and persisted total-size metadata
+- gallery with filters (FTS-backed prompt search, model, preset, size, date range, favorite), lightbox, “Edit this image”, download, delete/delete-all, prompt/image-url copy, and on-demand total-size metadata
 - ZIP export/import (`metadata.json`) with streaming upload, safety validation, and low-memory export path
 - access-key gate, IP allowlist/proxy-header support, GitHub version badge, and CSP nonce injection
 
@@ -80,7 +80,7 @@ npm --prefix frontend run build
 Runtime persistent storage is minimal:
 
 - generated images are saved in the `images/` directory
-- gallery metadata, image byte sizes, and API presets are stored in SQLite at `data/app.sqlite3`, including `completed_at`, Beijing completion time, and generation duration
+- gallery metadata, image byte sizes, FTS prompt-search index, and API presets are stored in SQLite at `data/app.sqlite3`, including `completed_at`, Beijing completion time, and generation duration
 - generation/edit job status, errors, timing, `completed_at`, and result metadata are stored in SQLite at `data/app.sqlite3`
 - active `asyncio.Task` handles live only in process memory; queued/running jobs from a previous process are marked interrupted on startup
 
@@ -377,7 +377,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 | `GET` | `/api/generate/{job_id}` | Get generation job status or result |
 | `GET` | `/api/generate/{job_id}/events` | Stream generation job status/progress over SSE |
 | `DELETE` | `/api/generate/{job_id}` | Cancel and remove a queued/running generation or edit job |
-| `GET` | `/api/gallery` | List gallery images with pagination and optional `prompt`, `model`, `preset`, `size`, `date_from`, `date_to`, and `favorite` filters |
+| `GET` | `/api/gallery` | List gallery images with pagination and optional `prompt`, `model`, `preset`, `size`, `date_from`, `date_to`, `favorite`, and `include_total_bytes` filters |
 | `PATCH` | `/api/gallery/{id}/favorite` | Set or clear a gallery favorite flag |
 | `GET` | `/api/image/{filename}` | Serve image file |
 | `GET` | `/api/thumb/{filename}` | Serve or lazily create a WebP gallery thumbnail |
@@ -395,7 +395,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 - SSE is the primary progress channel; `/api/generate/jobs` provides list/history (`include_finished=true`), and `/api/generate/jobs/events` streams live job changes
 - upstream image URL downloads are revalidated (SSRF-aware, no blind redirect follow) and bounded by `MAX_FILE_SIZE_MB`
 - `/api/import` enforces ZIP safety/size/count/compression checks; `/api/download-all` writes temp ZIP on disk to avoid high memory usage
-- gallery stores byte-size metadata and thumbnails (`THUMBNAILS_DIR`), with lazy thumbnail backfill for older images
+- gallery stores byte-size metadata and thumbnails (`THUMBNAILS_DIR`), with lazy thumbnail and opt-in byte-size backfill for older images
 - startup reconciliation removes gallery rows for missing files and marks previously running/queued jobs as interrupted
 
 ## Testing
@@ -468,7 +468,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 - 预览 + 历史任务：SSE 进度、`completed_at`、耗时、加载状态、排队/运行任务取消，以及从持久化历史复用/重试
 - 生成与编辑共享并发和排队限制
 - 可选任务回调 `webhook_url`：HTTPS 校验、SSRF 防护、签名与重试
-- Gallery：筛选（提示词、模型、预设、尺寸、日期区间、收藏）、Lightbox、”Edit this image”、下载/删除、复制提示词/图片链接、总大小统计
+- Gallery：筛选（FTS 提示词搜索、模型、预设、尺寸、日期区间、收藏）、Lightbox、”Edit this image”、下载/删除、复制提示词/图片链接、按需总大小统计
 - ZIP 导出导入（含 `metadata.json`）+ 流式上传 + 安全校验 + 低内存导出路径
 - 访问密钥、IP 白名单/反向代理头、版本检测、CSP nonce
 
@@ -515,7 +515,7 @@ npm --prefix frontend run build
 运行时持久化存储非常简单：
 
 - 生成的图片保存在 `images/` 目录
-- Gallery 元数据、图片字节数和 API 预设保存在 SQLite：`data/app.sqlite3`，包含真实图片宽高、`completed_at` 完成时间、北京时间生成完成时间和生成耗时
+- Gallery 元数据、图片字节数、FTS 提示词索引和 API 预设保存在 SQLite：`data/app.sqlite3`，包含真实图片宽高、`completed_at` 完成时间、北京时间生成完成时间和生成耗时
 - 生成/编辑任务的状态、错误、耗时、`completed_at`、请求参数和结果元数据保存在 SQLite：`data/app.sqlite3`
 - 运行中的 `asyncio.Task` 句柄仅保存在进程内存中；重启后，上个进程遗留的排队/运行任务会被标记为 interrupted
 
@@ -812,7 +812,7 @@ curl http://localhost:9090/health
 | `GET` | `/api/generate/{job_id}` | 查询任务状态或结果 |
 | `GET` | `/api/generate/{job_id}/events` | 通过 SSE 推送单个任务状态和进度 |
 | `DELETE` | `/api/generate/{job_id}` | 取消并移除排队/运行中的生成或编辑任务 |
-| `GET` | `/api/gallery` | 分页查询 Gallery 图片，可选 `prompt`、`model`、`preset`、`size`、`date_from`、`date_to`、`favorite` 筛选 |
+| `GET` | `/api/gallery` | 分页查询 Gallery 图片，可选 `prompt`、`model`、`preset`、`size`、`date_from`、`date_to`、`favorite`、`include_total_bytes` 筛选 |
 | `PATCH` | `/api/gallery/{id}/favorite` | 设置或取消 Gallery 收藏标记 |
 | `GET` | `/api/image/{filename}` | 访问图片文件 |
 | `GET` | `/api/thumb/{filename}` | 访问或懒生成 WebP Gallery 缩略图 |

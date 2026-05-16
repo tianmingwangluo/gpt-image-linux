@@ -41,7 +41,7 @@ const initialGalleryState: GalleryState = {
   selectedIds: new Set()
 };
 
-function buildGalleryParams(page: number, filters: GalleryFilters) {
+function buildGalleryParams(page: number, filters: GalleryFilters, includeTotalBytes = false) {
   const params = new URLSearchParams({ page: String(page), page_size: '9' });
   if (filters.prompt.trim()) params.set('prompt', filters.prompt.trim());
   if (filters.model) params.set('model', filters.model);
@@ -50,6 +50,7 @@ function buildGalleryParams(page: number, filters: GalleryFilters) {
   if (filters.dateFrom) params.set('date_from', filters.dateFrom);
   if (filters.dateTo) params.set('date_to', filters.dateTo);
   if (filters.favorite) params.set('favorite', 'true');
+  if (includeTotalBytes) params.set('include_total_bytes', 'true');
   return params;
 }
 
@@ -79,7 +80,7 @@ function createGalleryStore() {
     state = value;
   });
 
-  async function loadGallery(page = state.page) {
+  async function loadGallery(page = state.page, includeTotalBytes = false) {
     const seq = ++requestSeq;
     const filters = { ...state.filters };
     abortController?.abort();
@@ -87,7 +88,7 @@ function createGalleryStore() {
     update((current) => ({ ...current, loading: true }));
     try {
       const gallery = await apiFetch<GalleryResponse>(
-        `/api/gallery?${buildGalleryParams(page, filters).toString()}`,
+        `/api/gallery?${buildGalleryParams(page, filters, includeTotalBytes).toString()}`,
         { signal: abortController.signal },
         'loading gallery'
       );
