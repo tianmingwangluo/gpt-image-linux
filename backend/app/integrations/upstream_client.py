@@ -3,9 +3,9 @@ import asyncio
 import base64
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urljoin
 
 from ..core import settings as config
@@ -22,6 +22,12 @@ from ..schemas.models import EditRequest, GenerateRequest
 from .session_pool import TIMEOUT_PROBE, TIMEOUT_UPSTREAM, get_pool
 
 ProgressCallback = Callable[[str, str], None]
+
+
+class ImageEditSource(Protocol):
+    temp_path: Path
+    filename: str
+    content_type: str
 
 
 class UpstreamApiError(Exception):
@@ -823,13 +829,14 @@ async def call_image_edit_api(
     api_url: str,
     api_key: str,
     payload: EditRequest,
-    image_path: Path,
-    image_filename: str,
-    image_content_type: str,
+    image_sources: Sequence[ImageEditSource],
     api_preset_name: str | None = None,
     progress: ProgressCallback | None = None,
     socks5_proxy: str | None = None,
 ) -> list[storage.GalleryEntry]:
+    if not image_sources:
+        raise UpstreamApiError("At least one edit source image is required")
+
     api_path = "/v1/images/edits"
     upstream_url = build_upstream_url(api_url, api_path)
 
@@ -844,21 +851,31 @@ async def call_image_edit_api(
 
     if progress:
         progress("building_edit_form", "Building multipart edit request")
-    with image_path.open("rb") as image_file:
+    image_files = []
+    try:
         form = aiohttp.FormData()
-        form.add_field(
-            "image",
-            image_file,
-            filename=image_filename or "image.png",
-            content_type=image_content_type or "application/octet-stream",
-        )
+        image_field_name = "image" if len(image_sources) == 1 else "image[]"
+        for source in image_sources:
+            image_file = source.temp_path.open("rb")
+            image_files.append(image_file)
+            form.add_field(
+                image_field_name,
+                image_file,
+                filename=source.filename or "image.png",
+                content_type=source.content_type or "application/octet-stream",
+            )
         for key, value in _build_image_params(payload).items():
             form.add_field(key, str(value))
 
         pool = get_pool()
         upstream_session = pool.get(timeout_kind=TIMEOUT_UPSTREAM, socks5_proxy=socks5_proxy)
         if progress:
-            progress("uploading_edit_image", "Uploading source image and edit parameters")
+            upload_message = (
+                "Uploading source image and edit parameters"
+                if len(image_sources) == 1
+                else "Uploading source images and edit parameters"
+            )
+            progress("uploading_edit_image", upload_message)
         with observe_job_stage("upstream_wait"):
             async with upstream_session.post(
                 upstream_url,
@@ -892,3 +909,6 @@ async def call_image_edit_api(
             save_message="Saving edited images",
             progress=progress,
         )
+    finally:
+        for image_file in image_files:
+            image_file.close()

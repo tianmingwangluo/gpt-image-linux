@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -29,6 +30,14 @@ from ..services import webhook_service as webhooks
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EditImageSource:
+    temp_path: Path
+    byte_size: int
+    filename: str
+    content_type: str
 
 
 def get_job_subscribers() -> dict[str, set[asyncio.Queue]]:
@@ -468,11 +477,10 @@ def queue_image_job(
 
 def queue_edit_job(
     req: EditRequest,
-    image_path: Path,
-    image_source_bytes: int,
-    image_filename: str,
-    image_content_type: str,
+    image_sources: list[EditImageSource],
 ) -> GenerateJobResponse:
+    image_source_bytes = sum(source.byte_size for source in image_sources)
+
     def start_edit_job(
         job_id: str,
         api_url: str,
@@ -487,10 +495,8 @@ def queue_edit_job(
             api_key,
             api_preset_name,
             req,
-            image_path,
+            image_sources,
             image_source_bytes,
-            image_filename,
-            image_content_type,
             socks5_proxy,
         )
 
@@ -710,10 +716,8 @@ async def run_edit_job(
     api_key: str,
     api_preset_name: str,
     req: EditRequest,
-    image_path: Path,
+    image_sources: list[EditImageSource],
     image_source_bytes: int,
-    image_filename: str,
-    image_content_type: str,
     socks5_proxy: str = "",
 ):
     try:
@@ -734,9 +738,7 @@ async def run_edit_job(
                 api_url,
                 api_key,
                 req,
-                image_path,
-                image_filename,
-                image_content_type,
+                image_sources,
                 api_preset_name,
                 lambda stage, message: set_generate_job_progress(
                     job_id,
@@ -748,5 +750,6 @@ async def run_edit_job(
             ),
         )
     finally:
-        image_path.unlink(missing_ok=True)
+        for source in image_sources:
+            source.temp_path.unlink(missing_ok=True)
         release_pending_edit_source_bytes(image_source_bytes)

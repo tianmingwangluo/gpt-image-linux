@@ -2,13 +2,13 @@ import asyncio
 import mimetypes
 import os
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from ..gallery_archive import max_upload_bytes
-from ..jobs import build_edit_request_from_form, queue_edit_job
+from ..jobs import EditImageSource, build_edit_request_from_form, queue_edit_job
 from ..uploads import (
     IMAGE_UPLOAD_CONTENT_TYPES,
     is_image_upload,
@@ -23,16 +23,9 @@ from ...schemas.models import EditRequest, GenerateJobResponse
 router = APIRouter()
 
 
-@dataclass(frozen=True)
-class EditImageSource:
-    temp_path: Path
-    byte_size: int
-    filename: str
-    content_type: str
-
-
 EDIT_SOURCE_SNIFF_BYTES = 512
 EDIT_SOURCE_CHUNK_BYTES = 1024 * 1024
+MAX_EDIT_SOURCE_IMAGES = 16
 
 
 def edit_request_from_form(
@@ -138,7 +131,20 @@ def copy_edit_source_file_to_temp(
     return EditImageSource(temp_path, total, filename, content_type)
 
 
-async def read_upload_edit_source(image: UploadFile = File(...)) -> EditImageSource:
+def cleanup_edit_sources(sources: list[EditImageSource]):
+    for source in sources:
+        source.temp_path.unlink(missing_ok=True)
+
+
+def validate_edit_source_count(sources: list[EditImageSource]):
+    if len(sources) > MAX_EDIT_SOURCE_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_EDIT_SOURCE_IMAGES} edit source images are supported.",
+        )
+
+
+async def read_upload_edit_source(image: UploadFile) -> EditImageSource:
     if not is_image_upload(image):
         raise HTTPException(status_code=400, detail="Upload must be an image file.")
 
@@ -183,6 +189,30 @@ async def read_upload_edit_source(image: UploadFile = File(...)) -> EditImageSou
     return EditImageSource(temp_path, total, filename, image_content_type)
 
 
+async def read_upload_edit_sources(request: Request) -> list[EditImageSource]:
+    form = await request.form()
+    uploads: list[UploadFile] = []
+    for field_name in ("image", "image[]"):
+        for value in form.getlist(field_name):
+            if isinstance(value, StarletteUploadFile):
+                uploads.append(value)
+
+    if len(uploads) > MAX_EDIT_SOURCE_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_EDIT_SOURCE_IMAGES} edit source images are supported.",
+        )
+
+    sources: list[EditImageSource] = []
+    try:
+        for upload in uploads:
+            sources.append(await read_upload_edit_source(upload))
+    except BaseException:
+        cleanup_edit_sources(sources)
+        raise
+    return sources
+
+
 async def read_gallery_edit_source(image_id: str) -> EditImageSource:
     entry = storage.get_gallery_entry(image_id)
     if not entry:
@@ -210,19 +240,20 @@ async def read_gallery_edit_source(image_id: str) -> EditImageSource:
 
 @router.post("/api/edits", response_model=GenerateJobResponse, status_code=202)
 async def edit_image(
+    request: Request,
     req: EditRequest = Depends(edit_request_from_form),
-    source: EditImageSource = Depends(read_upload_edit_source),
 ):
+    sources = await read_upload_edit_sources(request)
+    if not sources:
+        raise HTTPException(status_code=422, detail="Upload image is required.")
+    validate_edit_source_count(sources)
     try:
         return queue_edit_job(
             req=req,
-            image_path=source.temp_path,
-            image_source_bytes=source.byte_size,
-            image_filename=source.filename,
-            image_content_type=source.content_type,
+            image_sources=sources,
         )
     except BaseException:
-        source.temp_path.unlink(missing_ok=True)
+        cleanup_edit_sources(sources)
         raise
 
 
@@ -232,18 +263,27 @@ async def edit_image(
     status_code=202,
 )
 async def edit_image_from_gallery(
+    request: Request,
     image_id: str,
     req: EditRequest = Depends(edit_request_from_form),
 ):
-    source = await read_gallery_edit_source(image_id)
+    upload_sources = await read_upload_edit_sources(request)
+    try:
+        gallery_source = await read_gallery_edit_source(image_id)
+    except BaseException:
+        cleanup_edit_sources(upload_sources)
+        raise
+    sources = [gallery_source, *upload_sources]
+    try:
+        validate_edit_source_count(sources)
+    except BaseException:
+        cleanup_edit_sources(sources)
+        raise
     try:
         return queue_edit_job(
             req=req,
-            image_path=source.temp_path,
-            image_source_bytes=source.byte_size,
-            image_filename=source.filename,
-            image_content_type=source.content_type,
+            image_sources=sources,
         )
     except BaseException:
-        source.temp_path.unlink(missing_ok=True)
+        cleanup_edit_sources(sources)
         raise

@@ -29,7 +29,7 @@ Key characteristics:
 ## Features
 
 - API preset management: base URL/path/key, per-preset default model, and global SOCKS5 upstream proxy
-- generation and image-editing (`/v1/images/edits`) with size/quality/format/compression/quantity controls
+- generation and image-editing (`/v1/images/edits`) with size/quality/format/compression/quantity controls and up to 16 edit reference images
 - preview + job history with SSE progress, `completed_at`, elapsed time, per-job stage timings, loading states, cancel for queued/running jobs, and reuse/retry from persisted history
 - shared queue and concurrency limits for generation/edit jobs
 - optional per-job `webhook_url` with HTTPS-only validation, SSRF checks, signing, and retry
@@ -95,9 +95,9 @@ Runtime persistent storage is minimal:
 
 ### Edit flow
 
-1. frontend selects source image (upload or gallery) and calls `/api/edits` or `/api/edits/from-gallery/{image_id}`
+1. frontend selects source images (one or more uploads, optionally combined with one gallery image) and calls `/api/edits` or `/api/edits/from-gallery/{image_id}`
 2. backend creates a job and calls upstream `/v1/images/edits` using multipart form data
-3. source image plus supported edit params are forwarded; unsupported source formats (for example SVG) are rejected
+3. source images plus supported edit params are forwarded; multiple references are sent upstream as repeated `image[]` fields, and unsupported source formats (for example SVG) are rejected
 4. progress stages stream via SSE; returned image data is decoded/downloaded, validated, and saved
 5. edited results appear in preview/gallery and follow the same queue, history, and cancellation model as generation
 
@@ -249,8 +249,9 @@ curl http://localhost:9090/health
 12. enter a prompt
 13. choose generation options
 14. click Generate
-15. optionally click Upload (or pick "Edit this image" in Gallery/Lightbox), then click Edits to run image-to-image
-16. view preview and gallery
+15. optionally upload one or more edit reference images, pick "Edit this image" in Gallery/Lightbox, or combine both; uploads append to the current edit sources and Clear removes all edit sources
+16. click Edits to run image-to-image
+17. view preview and gallery
 
 ## API paths
 
@@ -278,9 +279,10 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 
 ### `/v1/images/edits`
 
-- used by the Edits button after either image upload or gallery-image selection
+- used by the Edits button after image upload(s), gallery-image selection, or both
 - always calls `/v1/images/edits` on the configured API base URL
-- sends multipart/form-data with `image` plus supported edit parameters (source image can come from upload or gallery file)
+- sends multipart/form-data with source image fields plus supported edit parameters; single uploads use `image`, while multiple references are forwarded upstream as repeated `image[]`
+- supports up to 16 edit reference images total; local uploads append to the current source list and can be combined with one gallery source
 - uploaded source files must be supported raster image formats; SVG uploads are rejected
 - if the upstream returns `404`, `405`, or `501`, the UI reports that `/v1/images/edits` is not supported and stops the edit request
 
@@ -314,7 +316,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 
 ## Import and upload limits
 
-- uploaded source images are limited by `MAX_FILE_SIZE_MB` and must be supported raster formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.avif`, `.bmp`, `.heic`, `.heif`, `.ico`, `.tif`, `.tiff`); SVG is rejected
+- each uploaded source image is limited by `MAX_FILE_SIZE_MB` and must be a supported raster format (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.avif`, `.bmp`, `.heic`, `.heif`, `.ico`, `.tif`, `.tiff`); SVG is rejected
 - `/api/import` accepts ZIP archives created by `/api/download-all`
 - import archives must include `metadata.json`
 - import archives are validated for uploaded size, file count, total uncompressed size, metadata size, member-path safety, and compression ratio
@@ -376,8 +378,8 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 | `POST` | `/api/settings/presets/{preset_id}/health` | Validate a saved API preset and run a low-cost upstream probe |
 | `DELETE` | `/api/settings/presets/{preset_id}` | Delete an API preset |
 | `POST` | `/api/generate` | Start an image generation job |
-| `POST` | `/api/edits` | Start an image edit job with multipart image upload |
-| `POST` | `/api/edits/from-gallery/{image_id}` | Start an image edit job using an existing gallery image as source |
+| `POST` | `/api/edits` | Start an image edit job with one or more multipart image uploads |
+| `POST` | `/api/edits/from-gallery/{image_id}` | Start an image edit job using an existing gallery image, optionally with uploaded references |
 | `GET` | `/api/generate/jobs` | List queued/running generation and edit jobs; pass `include_finished=true` with optional `limit`/`offset` for paginated persisted history |
 | `GET` | `/api/generate/jobs/events` | Stream queued/running generation and edit jobs over SSE |
 | `GET` | `/api/generate/{job_id}` | Get generation job status or result |
@@ -398,7 +400,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 
 - app version comes from `APP_VERSION` then `VERSION`; optional GitHub remote check can show a `New` badge without blocking usage
 - presets and gallery/job data persist only in `DATABASE_FILE`
-- generation and edit share one queue (`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`), edit source images are staged under `DATA_DIR/edit-sources` and additionally capped by `MAX_PENDING_EDIT_SOURCE_MB`, support cancellation, and persist terminal history including `completed_at`
+- generation and edit share one queue (`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`), all edit source images are staged under `DATA_DIR/edit-sources` and additionally capped by `MAX_PENDING_EDIT_SOURCE_MB`, support cancellation, and persist terminal history including `completed_at`
 - SSE is the primary progress channel; `/api/generate/jobs` provides list/history (`include_finished=true`, optional `limit`/`offset`), and `/api/generate/jobs/events` streams debounced live job-list changes from memory
 - terminal job history includes `stage_timings` for `upstream_wait`, `download_decode`, `validate`, `thumbnail`, and `db_insert`; slow gallery queries are logged with query filters and totals
 - upstream JSON/SSE bodies are read with a `MAX_UPSTREAM_JSON_MB` cap before parsing, and upstream image URL downloads are revalidated (SSRF-aware, no blind redirect follow) and bounded by `MAX_FILE_SIZE_MB`
@@ -475,7 +477,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 ## 功能
 
 - API 预设管理：base URL/path/key、每个预设的默认 model、全局 SOCKS5 上游代理
-- 图像生成 + 图生图编辑（`/v1/images/edits`），支持尺寸/质量/格式/压缩率/数量等参数
+- 图像生成 + 图生图编辑（`/v1/images/edits`），支持尺寸/质量/格式/压缩率/数量等参数，并支持最多 16 张编辑参考图
 - 预览 + 历史任务：SSE 进度、`completed_at`、耗时、任务分段耗时、加载状态、排队/运行任务取消，以及从持久化历史复用/重试
 - 生成与编辑共享并发和排队限制
 - 可选任务回调 `webhook_url`：HTTPS 校验、SSRF 防护、签名与重试
@@ -541,9 +543,9 @@ npm --prefix frontend run build
 
 ### 编辑流程
 
-1. 前端选择编辑源（上传或 Gallery）并调用 `/api/edits` 或 `/api/edits/from-gallery/{image_id}`
+1. 前端选择编辑源（上传一张或多张图片，也可以组合一张 Gallery 图片）并调用 `/api/edits` 或 `/api/edits/from-gallery/{image_id}`
 2. 后端创建任务并以 multipart 调用上游 `/v1/images/edits`
-3. 转发源图与支持参数；不支持格式（如 SVG）会被拒绝
+3. 源图片和支持参数会被转发；多参考图会以重复的 `image[]` 字段发给上游，不支持格式（如 SVG）会被拒绝
 4. 通过 SSE 推送进度；返回数据解码/下载、校验并落盘
 5. 编辑结果进入预览和 Gallery，沿用与生成一致的队列/历史/取消模型
 
@@ -695,8 +697,9 @@ curl http://localhost:9090/health
 12. 输入提示词
 13. 选择生成参数
 14. 点击 Generate
-15. 也可以点击 Upload 选择图片，再点击 Edits 执行图生图
-16. 查看预览和 Gallery
+15. 也可以上传一张或多张编辑参考图、在 Gallery/Lightbox 中选择 “Edit this image”，或两者组合；上传会追加到当前编辑源，Clear 会清空全部编辑源
+16. 点击 Edits 执行图生图
+17. 查看预览和 Gallery
 
 ## 支持的 API Path
 
@@ -724,9 +727,10 @@ curl http://localhost:9090/health
 
 ### `/v1/images/edits`
 
-- 上传图片后点击 Edits，或在 Gallery 里选择 “Edit this image” 后点击 Edits 使用
+- 上传图片后点击 Edits、在 Gallery 里选择 “Edit this image” 后点击 Edits，或两者组合使用
 - 始终在配置的 API Base URL 下调用 `/v1/images/edits`
-- 使用 multipart/form-data 发送 `image` 和支持的编辑参数（源图片可来自上传或 Gallery）
+- 使用 multipart/form-data 发送源图片字段和支持的编辑参数；单张上传使用 `image`，多参考图会以重复的 `image[]` 字段转发给上游
+- 最多支持 16 张编辑参考图；本地上传会追加到当前编辑源列表，并可与一张 Gallery 源图组合
 - 上传的源图必须是受支持的位图图片格式；SVG 上传会被拒绝
 - 如果上游返回 `404`、`405` 或 `501`，界面会提示 `/v1/images/edits` 不受支持并停止编辑请求
 
@@ -760,7 +764,7 @@ curl http://localhost:9090/health
 
 ## 导入与上传限制
 
-- 上传作为编辑源图的图片大小受 `MAX_FILE_SIZE_MB` 限制，且必须是受支持的位图格式（`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.avif`、`.bmp`、`.heic`、`.heif`、`.ico`、`.tif`、`.tiff`）；SVG 会被拒绝
+- 每张上传的编辑源图大小受 `MAX_FILE_SIZE_MB` 限制，且必须是受支持的位图格式（`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.avif`、`.bmp`、`.heic`、`.heif`、`.ico`、`.tif`、`.tiff`）；SVG 会被拒绝
 - `/api/import` 只接受由 `/api/download-all` 导出的 ZIP 归档
 - 导入 ZIP 必须包含 `metadata.json`
 - 导入 ZIP 会校验上传体积、文件数、解压总体积、metadata 大小、安全路径和压缩比
@@ -822,8 +826,8 @@ curl http://localhost:9090/health
 | `POST` | `/api/settings/presets/{preset_id}/health` | 校验已保存 API 预设并执行低成本上游探测 |
 | `DELETE` | `/api/settings/presets/{preset_id}` | 删除 API 预设 |
 | `POST` | `/api/generate` | 创建图像生成任务 |
-| `POST` | `/api/edits` | 使用 multipart 图片上传创建图像编辑任务 |
-| `POST` | `/api/edits/from-gallery/{image_id}` | 使用已有 Gallery 图片作为源图创建图像编辑任务 |
+| `POST` | `/api/edits` | 使用一张或多张 multipart 上传图片创建图像编辑任务 |
+| `POST` | `/api/edits/from-gallery/{image_id}` | 使用已有 Gallery 图片创建图像编辑任务，可附加上传参考图 |
 | `GET` | `/api/generate/jobs` | 查询排队/运行中的生成和编辑任务；传 `include_finished=true` 并可选 `limit`/`offset` 可分页查询持久化历史 |
 | `GET` | `/api/generate/jobs/events` | 通过 SSE 推送排队/运行中的生成和编辑任务 |
 | `GET` | `/api/generate/{job_id}` | 查询任务状态或结果 |
@@ -844,7 +848,7 @@ curl http://localhost:9090/health
 
 - 版本读取顺序是 `APP_VERSION` -> `VERSION`；可选 GitHub 远端检查仅用于显示 `New`，不会阻塞使用
 - 预设与 Gallery/Job 数据只保存在 `DATABASE_FILE`
-- 生成与编辑共用队列（`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`）；编辑源图先落到 `DATA_DIR/edit-sources` 并额外受 `MAX_PENDING_EDIT_SOURCE_MB` 总量限制；支持取消，并持久化终态历史（含 `completed_at`）
+- 生成与编辑共用队列（`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`）；所有编辑源图先落到 `DATA_DIR/edit-sources` 并额外受 `MAX_PENDING_EDIT_SOURCE_MB` 总量限制；支持取消，并持久化终态历史（含 `completed_at`）
 - SSE 是主进度通道；`/api/generate/jobs` 提供列表/历史（`include_finished=true`，可选 `limit`/`offset`），`/api/generate/jobs/events` 从内存推送 debounce 后的实时任务列表变化
 - 任务终态历史包含 `stage_timings`：`upstream_wait`、`download_decode`、`validate`、`thumbnail`、`db_insert`；慢 Gallery 查询日志会带筛选条件与 total
 - 上游 JSON/SSE 响应会在解析前受 `MAX_UPSTREAM_JSON_MB` 限制；上游图片 URL 下载会做 SSRF/重定向目标复核，并受 `MAX_FILE_SIZE_MB` 限制

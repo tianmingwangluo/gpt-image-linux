@@ -14,9 +14,12 @@ from fastapi.testclient import TestClient
 
 from backend.app import main as backend_main
 from backend.app.api import jobs
+from backend.app.api.jobs import EditImageSource
 from backend.app.core import settings as config
 from backend.app.core.observability import metrics, record_job_stage_timing
+from backend.app.integrations.upstream_client import call_image_edit_api as ORIGINAL_CALL_IMAGE_EDIT_API
 from backend.app.repositories import storage
+from backend.app.schemas.models import EditRequest
 
 
 PNG_BYTES = base64.b64decode(
@@ -214,6 +217,30 @@ class _FakeSession:
         return self.responses.pop(0)
 
 
+class _FakePostSession:
+    def __init__(self, response: _FakeResponse):
+        self.response = response
+        self.data = None
+        self.requested_url = ""
+        self.headers = {}
+        self.allow_redirects = None
+
+    def post(self, url, **kwargs):
+        self.requested_url = url
+        self.data = kwargs.get("data")
+        self.headers = kwargs.get("headers") or {}
+        self.allow_redirects = kwargs.get("allow_redirects")
+        return self.response
+
+
+class _FakePool:
+    def __init__(self, session):
+        self.session = session
+
+    def get(self, **kwargs):
+        return self.session
+
+
 async def _download_with_fake_session(session: _FakeSession, image_url: str):
     from backend.app.integrations import upstream_client
 
@@ -267,14 +294,13 @@ def patch_upstream(monkeypatch):
         api_url,
         api_key,
         payload,
-        image_path,
-        image_filename,
-        image_content_type,
+        image_sources,
         api_preset_name=None,
         progress=None,
         socks5_proxy=None,
     ):
-        source_path = Path(image_path)
+        assert len(image_sources) == 1
+        source_path = image_sources[0].temp_path
         assert source_path.exists()
         assert source_path.read_bytes() == PNG_BYTES
         if progress:
@@ -709,14 +735,13 @@ def test_socks5_proxy_only_flows_to_generation_and_edit(client, monkeypatch):
         api_url,
         api_key,
         payload,
-        image_path,
-        image_filename,
-        image_content_type,
+        image_sources,
         api_preset_name=None,
         progress=None,
         socks5_proxy=None,
     ):
-        assert Path(image_path).exists()
+        assert len(image_sources) == 1
+        assert image_sources[0].temp_path.exists()
         seen["edit_proxy"] = socks5_proxy or ""
         image_id = storage.generate_image_id()
         filename = f"{image_id}.png"
@@ -1033,24 +1058,186 @@ def test_edit_upload_and_gallery_flow(client):
     assert gallery_job["status"] == "success"
 
 
-def test_edit_source_temp_path_is_cleaned_after_success(client, monkeypatch):
-    seen: dict[str, Path] = {}
+def test_edit_upload_accepts_multiple_sources(client, monkeypatch):
+    seen: dict[str, list[str]] = {}
 
     async def fake_edit_api(
         api_url,
         api_key,
         payload,
-        image_path,
-        image_filename,
-        image_content_type,
+        image_sources,
         api_preset_name=None,
         progress=None,
         socks5_proxy=None,
     ):
-        source_path = Path(image_path)
-        seen["path"] = source_path
-        assert source_path.exists()
-        assert source_path.read_bytes() == PNG_BYTES
+        seen["filenames"] = [source.filename for source in image_sources]
+        for source in image_sources:
+            assert source.temp_path.exists()
+            assert source.temp_path.read_bytes() == PNG_BYTES
+        image_id = storage.generate_image_id()
+        filename = f"{image_id}.png"
+        entry = await storage.add_to_gallery_async(
+            image_bytes=PNG_BYTES,
+            image_id=image_id,
+            prompt=payload.prompt,
+            size=payload.size,
+            filename=filename,
+            metadata={"api_path": "/v1/images/edits", "api_preset_name": api_preset_name},
+        )
+        return [entry]
+
+    monkeypatch.setattr(backend_main.proxy, "call_image_edit_api", fake_edit_api)
+
+    edit = client.post(
+        "/api/edits",
+        data={
+            "prompt": "combine references",
+            "model": "gpt-image-2",
+            "n": 1,
+            "quality": "auto",
+            "output_format": "png",
+        },
+        files=[
+            ("image[]", ("first.png", PNG_BYTES, "image/png")),
+            ("image[]", ("second.png", PNG_BYTES, "image/png")),
+        ],
+    )
+
+    assert edit.status_code == 202
+    assert _wait_for_job(client, edit.json()["job_id"])["status"] == "success"
+    assert seen["filenames"] == ["first.png", "second.png"]
+
+
+def test_edit_from_gallery_combines_uploaded_sources(client, monkeypatch):
+    seeded = _fake_gallery_entry("gallery-combo", "seed image", "1024x1024", "gallery-combo.png")
+    assert seeded is not None
+    seen: dict[str, list[str]] = {}
+
+    async def fake_edit_api(
+        api_url,
+        api_key,
+        payload,
+        image_sources,
+        api_preset_name=None,
+        progress=None,
+        socks5_proxy=None,
+    ):
+        seen["filenames"] = [source.filename for source in image_sources]
+        assert len(image_sources) == 2
+        assert image_sources[0].temp_path.read_bytes() == PNG_BYTES
+        assert image_sources[1].temp_path.read_bytes() == PNG_BYTES
+        image_id = storage.generate_image_id()
+        filename = f"{image_id}.png"
+        entry = await storage.add_to_gallery_async(
+            image_bytes=PNG_BYTES,
+            image_id=image_id,
+            prompt=payload.prompt,
+            size=payload.size,
+            filename=filename,
+            metadata={"api_path": "/v1/images/edits", "api_preset_name": api_preset_name},
+        )
+        return [entry]
+
+    monkeypatch.setattr(backend_main.proxy, "call_image_edit_api", fake_edit_api)
+
+    edit = client.post(
+        "/api/edits/from-gallery/gallery-combo",
+        data={
+            "prompt": "combine gallery and upload",
+            "model": "gpt-image-2",
+            "n": 1,
+            "quality": "auto",
+            "output_format": "png",
+        },
+        files={"image": ("upload.png", PNG_BYTES, "image/png")},
+    )
+
+    assert edit.status_code == 202
+    assert _wait_for_job(client, edit.json()["job_id"])["status"] == "success"
+    assert seen["filenames"] == ["gallery-combo.png", "upload.png"]
+
+
+def test_edit_rejects_more_than_16_sources(client):
+    resp = client.post(
+        "/api/edits",
+        data={
+            "prompt": "too many sources",
+            "model": "gpt-image-2",
+            "n": 1,
+            "quality": "auto",
+            "output_format": "png",
+        },
+        files=[
+            ("image", (f"source-{index}.png", PNG_BYTES, "image/png"))
+            for index in range(17)
+        ],
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "At most 16 edit source images are supported."
+
+
+def test_upstream_edit_api_sends_multiple_sources_as_image_array(client, tmp_path, monkeypatch):
+    from backend.app.integrations import upstream_client
+
+    first_path = tmp_path / "first.png"
+    second_path = tmp_path / "second.png"
+    first_path.write_bytes(PNG_BYTES)
+    second_path.write_bytes(PNG_BYTES)
+    sources = [
+        EditImageSource(first_path, len(PNG_BYTES), "first.png", "image/png"),
+        EditImageSource(second_path, len(PNG_BYTES), "second.png", "image/png"),
+    ]
+    response_body = json.dumps(
+        {"data": [{"b64_json": base64.b64encode(PNG_BYTES).decode("ascii")}]}
+    ).encode("utf-8")
+    session = _FakePostSession(
+        _FakeResponse(
+            200,
+            headers={"Content-Type": "application/json"},
+            chunks=[response_body],
+            peer_ip="93.184.216.34",
+        )
+    )
+
+    monkeypatch.setattr(upstream_client, "get_pool", lambda: _FakePool(session))
+    monkeypatch.setattr(upstream_client.ssrf, "validate_upstream_url", lambda *args, **kwargs: None)
+    monkeypatch.setattr(upstream_client.ssrf, "validate_response_peer_ip", lambda *args, **kwargs: None)
+
+    entries = asyncio.run(
+        ORIGINAL_CALL_IMAGE_EDIT_API(
+            "https://api.example.com",
+            "test-key",
+            EditRequest(prompt="field test", model="gpt-image-2"),
+            sources,
+        )
+    )
+
+    assert len(entries) == 1
+    assert session.requested_url == "https://api.example.com/v1/images/edits"
+    fields = [(options["name"], options.get("filename")) for options, _headers, _value in session.data._fields]
+    image_fields = [field for field in fields if field[0] == "image[]"]
+    assert image_fields == [("image[]", "first.png"), ("image[]", "second.png")]
+    assert ("image", "first.png") not in fields
+
+
+def test_edit_source_temp_path_is_cleaned_after_success(client, monkeypatch):
+    seen: dict[str, list[Path]] = {}
+
+    async def fake_edit_api(
+        api_url,
+        api_key,
+        payload,
+        image_sources,
+        api_preset_name=None,
+        progress=None,
+        socks5_proxy=None,
+    ):
+        assert len(image_sources) == 2
+        seen["paths"] = [source.temp_path for source in image_sources]
+        for source in image_sources:
+            assert source.temp_path.exists()
+            assert source.temp_path.read_bytes() == PNG_BYTES
         image_id = storage.generate_image_id()
         filename = f"{image_id}.png"
         entry = await storage.add_to_gallery_async(
@@ -1074,20 +1261,23 @@ def test_edit_source_temp_path_is_cleaned_after_success(client, monkeypatch):
             "quality": "auto",
             "output_format": "png",
         },
-        files={"image": ("input.png", PNG_BYTES, "image/png")},
+        files=[
+            ("image", ("input-1.png", PNG_BYTES, "image/png")),
+            ("image", ("input-2.png", PNG_BYTES, "image/png")),
+        ],
     )
 
     assert edit.status_code == 202
     assert _wait_for_job(client, edit.json()["job_id"])["status"] == "success"
-    assert "path" in seen
+    assert "paths" in seen
 
     deadline = time.time() + 5
     while time.time() < deadline:
-        if not seen["path"].exists() and jobs.get_pending_edit_source_bytes() == 0:
+        if all(not path.exists() for path in seen["paths"]) and jobs.get_pending_edit_source_bytes() == 0:
             break
         time.sleep(0.05)
 
-    assert not seen["path"].exists()
+    assert all(not path.exists() for path in seen["paths"])
     assert jobs.get_pending_edit_source_bytes() == 0
 
 
@@ -1103,14 +1293,13 @@ def test_cancelled_edit_job_cleans_temp_source(tmp_path, monkeypatch):
         api_url,
         api_key,
         payload,
-        image_path,
-        image_filename,
-        image_content_type,
+        image_sources,
         api_preset_name=None,
         progress=None,
         socks5_proxy=None,
     ):
-        source_path = Path(image_path)
+        assert len(image_sources) == 1
+        source_path = image_sources[0].temp_path
         seen["path"] = source_path
         assert source_path.exists()
         started.set()
@@ -1162,14 +1351,13 @@ def test_edit_queue_capacity_uses_pending_source_bytes(tmp_path, monkeypatch):
         api_url,
         api_key,
         payload,
-        image_path,
-        image_filename,
-        image_content_type,
+        image_sources,
         api_preset_name=None,
         progress=None,
         socks5_proxy=None,
     ):
-        assert Path(image_path).exists()
+        assert len(image_sources) == 1
+        assert image_sources[0].temp_path.exists()
         await asyncio.to_thread(release_event.wait)
         image_id = storage.generate_image_id()
         filename = f"{image_id}.png"
@@ -1216,6 +1404,33 @@ def test_edit_queue_capacity_uses_pending_source_bytes(tmp_path, monkeypatch):
         release_event.set()
         assert _wait_for_job(test_client, first.json()["job_id"])["status"] == "success"
         assert jobs.get_pending_edit_source_bytes() == 0
+
+
+def test_edit_queue_capacity_counts_multiple_source_bytes(tmp_path):
+    _configure_runtime(tmp_path)
+    config.MAX_PENDING_EDIT_SOURCE_MB = 1
+    large_png = PNG_BYTES + (b"\0" * (600 * 1024))
+
+    with TestClient(backend_main.app) as test_client:
+        edit = test_client.post(
+            "/api/edits",
+            data={
+                "prompt": "too much combined source data",
+                "model": "gpt-image-2",
+                "n": 1,
+                "quality": "auto",
+                "output_format": "png",
+            },
+            files=[
+                ("image", ("first.png", large_png, "image/png")),
+                ("image", ("second.png", large_png, "image/png")),
+            ],
+        )
+
+        assert edit.status_code == 429
+        assert edit.json()["detail"] == "Edit source queue is full"
+        assert jobs.get_pending_edit_source_bytes() == 0
+        assert not list((tmp_path / "data" / "edit-sources").glob("edit-source-*"))
 
 
 def test_gallery_image_download_and_zip(client):
@@ -1816,6 +2031,7 @@ def test_edit_jobs_share_queue_capacity(tmp_path, monkeypatch):
     async def blocking_edit_api(*args, **kwargs):
         await asyncio.to_thread(release_event.wait)
         payload = args[2]
+        assert args[3][0].temp_path.exists()
         image_id = storage.generate_image_id()
         filename = f"{image_id}.png"
         entry = await storage.add_to_gallery_async(
@@ -1824,7 +2040,7 @@ def test_edit_jobs_share_queue_capacity(tmp_path, monkeypatch):
             prompt=payload.prompt,
             size=payload.size,
             filename=filename,
-            metadata={"api_path": "/v1/images/edits", "api_preset_name": args[6]},
+            metadata={"api_path": "/v1/images/edits", "api_preset_name": args[4]},
         )
         return [entry]
 

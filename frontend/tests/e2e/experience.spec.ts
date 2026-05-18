@@ -196,6 +196,10 @@ async function mockApi(page: Page, options: MockOptions = {}) {
       await route.fulfill(json({ job_id: 'job-edited', status: 'queued', stage: 'queued', operation: 'edit' }, 202));
       return;
     }
+    if (url.pathname === '/api/edits' && request.method() === 'POST') {
+      await route.fulfill(json({ job_id: 'job-upload-edited', status: 'queued', stage: 'queued', operation: 'edit' }, 202));
+      return;
+    }
     if (url.pathname === '/api/generate/jobs') {
       const includeFinished = url.searchParams.get('include_finished') === 'true';
       await route.fulfill(json(includeFinished ? historyJobs : runningJobs));
@@ -218,6 +222,14 @@ async function mockApi(page: Page, options: MockOptions = {}) {
         status: 200,
         contentType: 'text/event-stream',
         body: `event: job\ndata: ${JSON.stringify({ ...job('job-edited', 'browser edit prompt'), operation: 'edit' })}\n\n`
+      });
+      return;
+    }
+    if (url.pathname === '/api/generate/job-upload-edited/events') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `event: job\ndata: ${JSON.stringify({ ...job('job-upload-edited', 'browser upload edit prompt'), operation: 'edit' })}\n\n`
       });
       return;
     }
@@ -296,6 +308,49 @@ test('generation, gallery edit source, batch favorite, and lightbox flows work w
   await expect(lightbox).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(lightbox).toBeHidden();
+});
+
+test('uploaded edit sources append, submit, and clear', async ({ page }) => {
+  await loadApp(page);
+
+  const upload = page.getByLabel('Upload edit image');
+  await upload.setInputFiles([{ name: 'first.png', mimeType: 'image/png', buffer: PNG_BYTES }]);
+  await expect(page.getByRole('button', { name: /Upload · first\.png/ })).toBeVisible();
+
+  await upload.setInputFiles([{ name: 'second.png', mimeType: 'image/png', buffer: PNG_BYTES }]);
+  await expect(page.getByRole('button', { name: /Upload · first\.png/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Upload · second\.png/ })).toBeVisible();
+
+  await page.getByRole('textbox', { name: 'Prompt', exact: true }).fill('browser upload edit prompt');
+  const editRequestPromise = page.waitForRequest((request) => new URL(request.url()).pathname === '/api/edits');
+  await page.getByRole('button', { name: 'Edits' }).click();
+  const editRequest = await editRequestPromise;
+  const body = editRequest.postDataBuffer()?.toString('latin1') || '';
+  expect(body).toContain('name="image[]"');
+  expect(body).toContain('filename="first.png"');
+  expect(body).toContain('filename="second.png"');
+
+  await page.getByRole('button', { name: 'Clear edit sources' }).click();
+  await expect(page.getByRole('button', { name: /Upload · first\.png/ })).toBeHidden();
+  await expect(page.getByRole('button', { name: /Upload · second\.png/ })).toBeHidden();
+  await page.getByRole('button', { name: 'Edits' }).click();
+  await expect(page.getByText('Please upload an image or choose one from gallery first')).toBeVisible();
+});
+
+test('gallery edit source can be combined with uploaded references', async ({ page }) => {
+  await loadApp(page);
+
+  await page.getByLabel('Upload edit image').setInputFiles([{ name: 'extra.png', mimeType: 'image/png', buffer: PNG_BYTES }]);
+  await page.locator('.gallery-card').first().getByRole('button', { name: 'Edit' }).click();
+  await expect(page.getByRole('button', { name: /Gallery · Gallery: img-1\.png/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Upload · extra\.png/ })).toBeVisible();
+
+  await page.getByRole('textbox', { name: 'Prompt', exact: true }).fill('browser edit prompt');
+  const editRequestPromise = page.waitForRequest((request) => new URL(request.url()).pathname === '/api/edits/from-gallery/img-1');
+  await page.getByRole('button', { name: 'Edits' }).click();
+  const editRequest = await editRequestPromise;
+  const body = editRequest.postDataBuffer()?.toString('latin1') || '';
+  expect(body).toContain('filename="extra.png"');
 });
 
 test('job drawer open baseline with 500 running rows', async ({ page }) => {

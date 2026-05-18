@@ -18,7 +18,7 @@
   import { accessStore } from '$lib/stores/access';
   import { galleryStore } from '$lib/stores/gallery';
   import { jobsStore } from '$lib/stores/jobs';
-  import { DEFAULT_PROMPT_MODEL, editSourceStore, initialPromptFormState, previewStore, type PromptFormState } from '$lib/stores/preview';
+  import { DEFAULT_PROMPT_MODEL, MAX_EDIT_SOURCE_IMAGES, editSourceStore, initialPromptFormState, previewStore, type PromptFormState } from '$lib/stores/preview';
   import { settingsStore } from '$lib/stores/settings';
   import { uiStore } from '$lib/stores/ui';
   import { copyText, galleryImageSize, imageUrl } from '$lib/utils/format';
@@ -32,6 +32,8 @@
   let lightboxImage: GalleryEntry | null = null;
   let form: PromptFormState = { ...initialPromptFormState };
   let editPicker: EditSourcePicker;
+  let editPreviewUrl = '';
+  let editPreviewLabel = '';
   let lastActivePresetId = '';
   let lastActivePresetDefaultModel = DEFAULT_PROMPT_MODEL;
 
@@ -171,16 +173,12 @@
   }
 
   function prepareGalleryImageForEdit(image: GalleryEntry) {
-    previewStore.cleanup();
-    editSourceStore.set({
-      file: null,
-      selectedGalleryImageId: image.id,
-      label: $t.messages.galleryEditLabel(image.filename),
-      previewUrl: imageUrl(image.filename),
-      previewLabel: $t.messages.galleryEditLabel(image.filename)
-    });
+    const nextLabel = $t.messages.galleryEditLabel(image.filename);
+    if (!previewStore.setGalleryEditSource(image.id, nextLabel, imageUrl(image.filename), nextLabel)) {
+      showToast($t.messages.editSourceLimit(MAX_EDIT_SOURCE_IMAGES), 'error');
+      return;
+    }
     form = { ...form, size: galleryImageSize(image) };
-    editPicker?.reset();
     lightboxImage = null;
     showToast($t.messages.galleryImageReady);
   }
@@ -189,13 +187,27 @@
     previewStore.handleEditFile(event);
   }
 
-  function openEditPreview() {
-    if ($editSourceStore.previewUrl) setUi('editPreviewOpen', true);
+  function openEditPreview(sourceId: string) {
+    const upload = $editSourceStore.files.find((source) => source.id === sourceId);
+    if (upload) {
+      editPreviewUrl = upload.previewUrl;
+      editPreviewLabel = upload.previewLabel;
+      setUi('editPreviewOpen', true);
+      return;
+    }
+    if ($editSourceStore.selectedGalleryImageId === sourceId && $editSourceStore.galleryPreviewUrl) {
+      editPreviewUrl = $editSourceStore.galleryPreviewUrl;
+      editPreviewLabel = $editSourceStore.galleryPreviewLabel || $editSourceStore.galleryLabel;
+      setUi('editPreviewOpen', true);
+    }
   }
 
   function clearEditSource() {
     previewStore.clearEditSource();
     editPicker?.reset();
+    setUi('editPreviewOpen', false);
+    editPreviewUrl = '';
+    editPreviewLabel = '';
   }
 
   async function batchFavoriteGallery(favorite: boolean) {
@@ -207,7 +219,12 @@
   async function batchDeleteGallery() {
     await galleryStore.batchDelete(showToast, (ids) => {
       if (lightboxImage && ids.includes(lightboxImage.id)) lightboxImage = null;
-      if ($editSourceStore.selectedGalleryImageId && ids.includes($editSourceStore.selectedGalleryImageId)) clearEditSource();
+      if ($editSourceStore.selectedGalleryImageId && ids.includes($editSourceStore.selectedGalleryImageId)) {
+        previewStore.clearGalleryEditSource($editSourceStore.selectedGalleryImageId);
+        setUi('editPreviewOpen', false);
+        editPreviewUrl = '';
+        editPreviewLabel = '';
+      }
     });
   }
 
@@ -220,14 +237,22 @@
   async function deleteImage(image: GalleryEntry) {
     await galleryStore.deleteImage(image, showToast, () => {
       if (lightboxImage?.id === image.id) lightboxImage = null;
-      if ($editSourceStore.selectedGalleryImageId === image.id) clearEditSource();
+      if ($editSourceStore.selectedGalleryImageId === image.id) {
+        previewStore.clearGalleryEditSource(image.id);
+        setUi('editPreviewOpen', false);
+        editPreviewUrl = '';
+        editPreviewLabel = '';
+      }
     });
   }
 
   async function deleteAllImages() {
     await galleryStore.deleteAll(showToast, () => {
       lightboxImage = null;
-      clearEditSource();
+      previewStore.clearGalleryEditSource($editSourceStore.selectedGalleryImageId);
+      setUi('editPreviewOpen', false);
+      editPreviewUrl = '';
+      editPreviewLabel = '';
       clearPreview();
     });
   }
@@ -280,7 +305,7 @@
     form = jobToPromptForm(job);
     setUi('jobsOpen', false);
     if (job.operation === 'edit') {
-      if (!$editSourceStore.file && !$editSourceStore.selectedGalleryImageId) {
+      if (!$editSourceStore.files.length && !$editSourceStore.selectedGalleryImageId) {
         previewStore.setError($t.messages.editRetryNeedsSource);
         showToast($t.messages.editRetryNeedsSource, 'error');
         return;
@@ -377,9 +402,25 @@
     <EditSourcePicker
       slot="edit-source"
       bind:this={editPicker}
-      label={$editSourceStore.label}
+      sources={[
+        ...($editSourceStore.selectedGalleryImageId
+          ? [
+              {
+                id: $editSourceStore.selectedGalleryImageId,
+                label: $editSourceStore.galleryLabel || $editSourceStore.galleryPreviewLabel,
+                kind: 'gallery' as const
+              }
+            ]
+          : []),
+        ...$editSourceStore.files.map((source) => ({
+          id: source.id,
+          label: source.label,
+          kind: 'upload' as const
+        }))
+      ]}
       onChange={handleEditFile}
       onPreview={openEditPreview}
+      onClear={clearEditSource}
     />
   </PromptForm>
 
@@ -433,8 +474,8 @@
 
 <EditPreviewModal
   open={$uiStore.editPreviewOpen}
-  url={$editSourceStore.previewUrl}
-  label={$editSourceStore.previewLabel}
+  url={editPreviewUrl}
+  label={editPreviewLabel}
   onClose={() => setUi('editPreviewOpen', false)}
 />
 
