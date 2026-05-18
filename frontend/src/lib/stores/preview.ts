@@ -41,10 +41,12 @@ const initialPreviewState: PreviewState = {
   prompt: ''
 };
 
+export const DEFAULT_PROMPT_MODEL = 'gpt-image-2';
+
 export const initialPromptFormState: PromptFormState = {
   prompt: '',
   size: 'auto',
-  model: 'gpt-image-2',
+  model: DEFAULT_PROMPT_MODEL,
   quality: 'auto',
   outputFormat: 'png',
   outputCompression: '',
@@ -65,7 +67,7 @@ function buildRequestBody(form: PromptFormState): GenerateRequestBody {
   const body: GenerateRequestBody = {
     prompt: form.prompt.trim(),
     size: form.size,
-    model: form.model.trim() || 'gpt-image-2',
+    model: form.model.trim(),
     n: Math.min(Math.max(Number(form.quantity) || 1, 1), 10),
     quality: form.quality,
     output_format: form.outputFormat,

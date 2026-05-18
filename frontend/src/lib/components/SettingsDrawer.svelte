@@ -20,6 +20,7 @@
   let activePresetId = '';
   let presetName = '';
   let apiUrl = '';
+  let defaultModel = '';
   let apiKey = '';
   let apiPath: ApiPath = '/v1/images/generations';
   let upstreamSocks5Proxy = '';
@@ -30,6 +31,7 @@
     activePresetId = settings.active_preset_id;
     presetName = activePreset.name || '';
     apiUrl = activePreset.api_url || settings.api_url || '';
+    defaultModel = activePreset.default_model || settings.default_model || 'gpt-image-2';
     apiKey =
       activePreset.api_key_source === 'env' && activePreset.api_key_env_var
         ? `\${${activePreset.api_key_env_var}}`
@@ -48,6 +50,7 @@
       active_preset_id: activePresetId,
       preset_name: presetName.trim(),
       api_url: apiUrl.trim(),
+      default_model: defaultModel.trim(),
       api_key: apiKey.trim() === MASKED_API_KEY_VALUE ? null : apiKey.trim(),
       api_path: apiPath,
       upstream_socks5_proxy: proxyValue === currentProxyMask ? null : proxyValue
@@ -163,6 +166,10 @@
               <option value="/v1/responses">/v1/responses</option>
               <option value="/v1/chat/completions">/v1/chat/completions</option>
             </select>
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.settings.defaultModel}</span>
+            <input bind:value={defaultModel} class="control-focus w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 focus:border-emerald-500" placeholder="gpt-image-2" />
           </label>
           <label class="block">
             <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.settings.apiKey}</span>

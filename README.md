@@ -28,7 +28,7 @@ Key characteristics:
 
 ## Features
 
-- API preset management: base URL/path/key, model, and global SOCKS5 upstream proxy
+- API preset management: base URL/path/key, per-preset default model, and global SOCKS5 upstream proxy
 - generation and image-editing (`/v1/images/edits`) with size/quality/format/compression/quantity controls
 - preview + job history with SSE progress, `completed_at`, elapsed time, per-job stage timings, loading states, cancel for queued/running jobs, and reuse/retry from persisted history
 - shared queue and concurrency limits for generation/edit jobs
@@ -241,15 +241,16 @@ curl http://localhost:9090/health
 4. choose an existing preset or click New
 5. enter the API base URL
 6. choose the API path
-7. enter the API key, or an env ref such as `${OPENAI_API_KEY}`
-8. optionally enter a global SOCKS5 proxy such as `socks5://127.0.0.1:1080`
-9. optionally run Health check for the saved preset
-10. click Save Preset
-11. enter a prompt
-12. choose generation options
-13. click Generate
-13. optionally click Upload (or pick "Edit this image" in Gallery/Lightbox), then click Edits to run image-to-image
-14. view preview and gallery
+7. enter the preset default model; the Generate/Edit form's Model field defaults to the active preset's value
+8. enter the API key, or an env ref such as `${OPENAI_API_KEY}`
+9. optionally enter a global SOCKS5 proxy such as `socks5://127.0.0.1:1080`
+10. optionally run Health check for the saved preset
+11. click Save Preset
+12. enter a prompt
+13. choose generation options
+14. click Generate
+15. optionally click Upload (or pick "Edit this image" in Gallery/Lightbox), then click Edits to run image-to-image
+16. view preview and gallery
 
 ## API paths
 
@@ -263,7 +264,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 ### `/v1/responses`
 
 - sends generation requests to the Responses API
-- sends only `prompt` and `model` in the upstream request body
+- sends only `prompt` and `model` in the upstream request body; the UI model default comes from the active preset
 - reads base64 image data from `output[]` items of type `image_generation_call`
 - size, quality, format, compression, quantity, and response format controls are disabled in the UI for this path
 
@@ -326,7 +327,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 | `DEFAULT_API_URL` | empty | Pre-fill API base URL; may omit or include `/v1` |
 | `DEFAULT_API_KEY` | empty | Pre-fill API key; may be a literal key or an env ref such as `${OPENAI_API_KEY}` |
 | `DEFAULT_API_PATH` | `/v1/images/generations` | Default upstream path; supported values are `/v1/images/generations`, `/v1/responses`, and `/v1/chat/completions` |
-| `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | Top-level model used when calling `/v1/responses` |
+| `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | Fallback top-level model used for `/v1/responses` when no request/preset model is provided |
 | `DEFAULT_UPSTREAM_SOCKS5_PROXY` | empty | Optional default global SOCKS5 proxy for generation/edit upstream API calls |
 | `APP_VERSION` | `VERSION` file | Override the app version shown in the UI and returned by `/api/version` |
 | `GITHUB_REPO` | `Z1rconium/gpt-image-linux` | GitHub `owner/repo` used for release update detection; set empty to disable latest-version checks |
@@ -473,7 +474,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 
 ## 功能
 
-- API 预设管理：base URL/path/key、model、全局 SOCKS5 上游代理
+- API 预设管理：base URL/path/key、每个预设的默认 model、全局 SOCKS5 上游代理
 - 图像生成 + 图生图编辑（`/v1/images/edits`），支持尺寸/质量/格式/压缩率/数量等参数
 - 预览 + 历史任务：SSE 进度、`completed_at`、耗时、任务分段耗时、加载状态、排队/运行任务取消，以及从持久化历史复用/重试
 - 生成与编辑共享并发和排队限制
@@ -686,15 +687,16 @@ curl http://localhost:9090/health
 4. 选择已有预设，或点击 New 新建预设
 5. 填写 API Base URL
 6. 选择 API Path
-7. 填写 API Key，或填写 `${OPENAI_API_KEY}` 这类环境变量引用
-8. 可选：填写全局 SOCKS5 代理，例如 `socks5://127.0.0.1:1080`
-9. 可选：对已保存预设执行 Health check
-10. 点击 Save Preset
-11. 输入提示词
-12. 选择生成参数
-13. 点击 Generate
-14. 也可以点击 Upload 选择图片，再点击 Edits 执行图生图
-15. 查看预览和 Gallery
+7. 填写该预设的默认模型；Generate/Edit 表单里的 Model 默认值会使用当前预设的值
+8. 填写 API Key，或填写 `${OPENAI_API_KEY}` 这类环境变量引用
+9. 可选：填写全局 SOCKS5 代理，例如 `socks5://127.0.0.1:1080`
+10. 可选：对已保存预设执行 Health check
+11. 点击 Save Preset
+12. 输入提示词
+13. 选择生成参数
+14. 点击 Generate
+15. 也可以点击 Upload 选择图片，再点击 Edits 执行图生图
+16. 查看预览和 Gallery
 
 ## 支持的 API Path
 
@@ -708,7 +710,7 @@ curl http://localhost:9090/health
 ### `/v1/responses`
 
 - 向 Responses API 发送生成请求
-- 上游请求体只发送 `prompt` 和 `model`
+- 上游请求体只发送 `prompt` 和 `model`；UI 里的模型默认值来自当前预设
 - 从 `output[]` 中类型为 `image_generation_call` 的项目读取 base64 图片数据
 - 选择该路径时，界面中的尺寸、质量、格式、压缩率、数量和 response format 控件会被禁用
 
@@ -771,7 +773,7 @@ curl http://localhost:9090/health
 | `DEFAULT_API_URL` | 空 | 预填 API Base URL；可以不带或带 `/v1` |
 | `DEFAULT_API_KEY` | 空 | 预填 API Key；可以是真实 key，也可以是 `${OPENAI_API_KEY}` 这类环境变量引用 |
 | `DEFAULT_API_PATH` | `/v1/images/generations` | 默认上游路径；支持 `/v1/images/generations`、`/v1/responses` 和 `/v1/chat/completions` |
-| `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | 调用 `/v1/responses` 时使用的顶层模型 |
+| `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | 当请求/预设没有提供模型时，`/v1/responses` 使用的兜底顶层模型 |
 | `DEFAULT_UPSTREAM_SOCKS5_PROXY` | 空 | 可选的全局 SOCKS5 代理默认值，仅用于生成/编辑的上游 API 请求 |
 | `APP_VERSION` | `VERSION` 文件 | 覆盖界面显示和 `/api/version` 返回的当前应用版本 |
 | `GITHUB_REPO` | `Z1rconium/gpt-image-linux` | 用于检测新版本的 GitHub `owner/repo`；设为空可禁用最新版本检查 |

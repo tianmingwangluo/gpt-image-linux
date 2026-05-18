@@ -53,6 +53,7 @@ const settingsResponse = {
   has_api_key: true,
   api_key_source: 'stored',
   api_path: '/v1/images/generations',
+  default_model: 'preset-default-model',
   has_upstream_socks5_proxy: false,
   upstream_socks5_proxy_masked: '',
   presets: [
@@ -63,7 +64,8 @@ const settingsResponse = {
       api_key_masked: '********',
       has_api_key: true,
       api_key_source: 'stored',
-      api_path: '/v1/images/generations'
+      api_path: '/v1/images/generations',
+      default_model: 'preset-default-model'
     }
   ]
 };
@@ -250,10 +252,12 @@ test('access gate unlocks before loading the app', async ({ page }) => {
 test('settings drawer traps focus and key form controls have accessible names', async ({ page }) => {
   await loadApp(page);
 
+  await expect(page.getByRole('textbox', { name: 'Model' })).toHaveValue('preset-default-model');
   await page.getByRole('button', { name: 'Settings' }).click();
   const drawer = page.getByRole('dialog', { name: 'Settings' });
   await expect(drawer).toBeVisible();
   await expect(page.getByLabel('API URL')).toHaveValue('https://api.example.com');
+  await expect(page.getByLabel('Default model')).toHaveValue('preset-default-model');
   await expect(page.getByLabel('Filter prompt')).toBeVisible();
 
   for (let index = 0; index < 12; index += 1) {

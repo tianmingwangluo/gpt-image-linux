@@ -526,6 +526,8 @@ def test_settings_and_presets(client):
     body = settings.json()
     assert body["presets"]
     assert body["active_preset_id"]
+    assert body["default_model"] == "gpt-image-2"
+    assert body["presets"][0]["default_model"] == "gpt-image-2"
 
     updated = client.post(
         "/api/settings",
@@ -535,10 +537,12 @@ def test_settings_and_presets(client):
             "api_url": "https://api.example.com",
             "api_key": "new-key",
             "api_path": "/v1/responses",
+            "default_model": "gpt-image-2-preview",
         },
     )
     assert updated.status_code == 200
     assert updated.json()["api_path"] == "/v1/responses"
+    assert updated.json()["default_model"] == "gpt-image-2-preview"
 
     chat_updated = client.post(
         "/api/settings",
@@ -552,10 +556,12 @@ def test_settings_and_presets(client):
     )
     assert chat_updated.status_code == 200
     assert chat_updated.json()["api_path"] == "/v1/chat/completions"
+    assert chat_updated.json()["default_model"] == "gpt-image-2-preview"
 
     created = client.post("/api/settings/presets", json={"name": "Alt"})
     assert created.status_code == 200
     assert len(created.json()["presets"]) == 2
+    assert created.json()["default_model"] == "gpt-image-2-preview"
 
 
 def test_build_upstream_url_accepts_openai_style_v1_base():
@@ -2240,7 +2246,7 @@ def test_validation_422_and_global_500(tmp_path, monkeypatch):
         assert broken.json()["detail"] == "Internal Server Error"
 
 
-def test_responses_request_uses_default_responses_model(tmp_path):
+def test_responses_request_uses_payload_model_with_default_fallback(tmp_path):
     _configure_runtime(tmp_path)
     from backend.app.integrations import upstream_client as upstream_client_module
     from backend.app.schemas.models import GenerateRequest
@@ -2248,12 +2254,40 @@ def test_responses_request_uses_default_responses_model(tmp_path):
     config.DEFAULT_RESPONSES_MODEL = "gpt-5.4"
     payload = GenerateRequest(prompt="hello", model="gpt-image-2", size="1024x1024")
     request_data = upstream_client_module.build_responses_request_data(payload)
-    assert request_data["model"] == "gpt-5.4"
+    assert request_data["model"] == "gpt-image-2"
     assert request_data["prompt"] == "hello"
 
-    config.DEFAULT_RESPONSES_MODEL = ""
-    fallback = upstream_client_module.build_responses_request_data(payload)
-    assert fallback["model"] == "gpt-image-2"
+    omitted = GenerateRequest(prompt="hello", model="", size="1024x1024")
+    fallback = upstream_client_module.build_responses_request_data(omitted)
+    assert fallback["model"] == "gpt-5.4"
+
+
+def test_generate_uses_active_preset_default_model_when_model_is_omitted(client):
+    settings = client.get("/api/settings").json()
+    update = client.post(
+        "/api/settings",
+        json={
+            "active_preset_id": settings["active_preset_id"],
+            "preset_name": "Primary",
+            "api_url": settings["api_url"],
+            "api_key": "new-key",
+            "api_path": settings["api_path"],
+            "default_model": "gpt-image-3",
+        },
+    )
+    assert update.status_code == 200
+
+    resp = client.post(
+        "/api/generate",
+        json={
+            "prompt": "preset default model",
+            "size": "1024x1024",
+        },
+    )
+    assert resp.status_code == 202
+    job = _wait_for_job(client, resp.json()["job_id"])
+    assert job["status"] == "success"
+    assert job["model"] == "gpt-image-3"
 
 
 def test_chat_completions_request_uses_prompt_and_model(tmp_path):

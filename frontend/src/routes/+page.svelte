@@ -14,11 +14,11 @@
   import ToastHost from '$lib/components/ToastHost.svelte';
   import { apiFetch } from '$lib/api/client';
   import { t } from '$lib/i18n';
-  import type { GalleryEntry, GenerateJobStatus } from '$lib/api/types';
+  import type { GalleryEntry, GenerateJobStatus, SettingsResponse } from '$lib/api/types';
   import { accessStore } from '$lib/stores/access';
   import { galleryStore } from '$lib/stores/gallery';
   import { jobsStore } from '$lib/stores/jobs';
-  import { editSourceStore, initialPromptFormState, previewStore, type PromptFormState } from '$lib/stores/preview';
+  import { DEFAULT_PROMPT_MODEL, editSourceStore, initialPromptFormState, previewStore, type PromptFormState } from '$lib/stores/preview';
   import { settingsStore } from '$lib/stores/settings';
   import { uiStore } from '$lib/stores/ui';
   import { copyText, galleryImageSize, imageUrl } from '$lib/utils/format';
@@ -32,8 +32,11 @@
   let lightboxImage: GalleryEntry | null = null;
   let form: PromptFormState = { ...initialPromptFormState };
   let editPicker: EditSourcePicker;
+  let lastActivePresetId = '';
+  let lastActivePresetDefaultModel = DEFAULT_PROMPT_MODEL;
 
   $: activeJobsCount = $jobsStore.jobs.length;
+  $: syncFormModelToActivePreset($settingsStore.settings);
 
   async function loadVersion() {
     try {
@@ -87,6 +90,29 @@
     uiStore.setKey(key, value);
   }
 
+  function activePreset(settings: SettingsResponse | null) {
+    return settings?.presets.find((preset) => preset.id === settings.active_preset_id) || settings?.presets[0] || null;
+  }
+
+  function presetDefaultModel(settings: SettingsResponse | null) {
+    const preset = activePreset(settings);
+    return (preset?.default_model || settings?.default_model || DEFAULT_PROMPT_MODEL).trim() || DEFAULT_PROMPT_MODEL;
+  }
+
+  function syncFormModelToActivePreset(settings: SettingsResponse | null) {
+    const preset = activePreset(settings);
+    const nextPresetId = preset?.id || '';
+    const nextDefaultModel = presetDefaultModel(settings);
+    if (nextPresetId === lastActivePresetId && nextDefaultModel === lastActivePresetDefaultModel) return;
+
+    const currentModel = form.model.trim();
+    if (!currentModel || currentModel === lastActivePresetDefaultModel) {
+      form = { ...form, model: nextDefaultModel };
+    }
+    lastActivePresetId = nextPresetId;
+    lastActivePresetDefaultModel = nextDefaultModel;
+  }
+
   function saveSettings(body: Record<string, unknown>) {
     void settingsStore.saveSettings(body, showToast).then(() => setUi('settingsOpen', false));
   }
@@ -133,7 +159,11 @@
   }
 
   function regenerate() {
-    previewStore.regenerate((next) => (form = next), generateImage, editImage);
+    previewStore.regenerate(
+      (next) => (form = { ...next, model: next.model.trim() || lastActivePresetDefaultModel || initialPromptFormState.model }),
+      generateImage,
+      editImage
+    );
   }
 
   function clearPreview() {
@@ -230,7 +260,7 @@
     return {
       prompt: job.prompt || '',
       size: job.size || initialPromptFormState.size,
-      model: job.model || initialPromptFormState.model,
+      model: job.model || lastActivePresetDefaultModel || initialPromptFormState.model,
       quality: normalizeJobQuality(job.quality),
       outputFormat: normalizeJobOutputFormat(job.output_format),
       outputCompression: job.output_compression === null || job.output_compression === undefined ? '' : String(job.output_compression),

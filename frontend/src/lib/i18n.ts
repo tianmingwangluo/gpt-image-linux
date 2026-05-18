@@ -55,7 +55,7 @@ const en = {
   },
   settings: {
     title: 'Settings',
-    subtitle: 'API presets, upstream path, and SOCKS5 proxy',
+    subtitle: 'API presets, default model, upstream path, and SOCKS5 proxy',
     closeLabel: 'Close settings',
     presets: 'Presets',
     newPreset: 'New',
@@ -63,6 +63,7 @@ const en = {
     presetName: 'Preset name',
     apiUrl: 'API URL',
     apiPath: 'API path',
+    defaultModel: 'Default model',
     apiKey: 'API key',
     apiKeyHint: 'Use ${OPENAI_API_KEY} to store only an environment-variable reference in SQLite.',
     upstreamSocks5Proxy: 'SOCKS5 proxy',
@@ -307,7 +308,7 @@ const zh: TranslationSchema<typeof en> = {
   },
   settings: {
     title: '设置',
-    subtitle: 'API 预设、上游路径和 SOCKS5 代理',
+    subtitle: 'API 预设、默认模型、上游路径和 SOCKS5 代理',
     closeLabel: '关闭设置',
     presets: '预设',
     newPreset: '新增',
@@ -315,6 +316,7 @@ const zh: TranslationSchema<typeof en> = {
     presetName: '预设名称',
     apiUrl: 'API URL',
     apiPath: 'API 路径',
+    defaultModel: '默认模型',
     apiKey: 'API 密钥',
     apiKeyHint: '可填写 ${OPENAI_API_KEY}，SQLite 里只保存环境变量引用。',
     upstreamSocks5Proxy: 'SOCKS5 代理',

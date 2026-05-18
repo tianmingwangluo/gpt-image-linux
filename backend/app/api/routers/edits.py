@@ -38,7 +38,7 @@ EDIT_SOURCE_CHUNK_BYTES = 1024 * 1024
 def edit_request_from_form(
     prompt: str = Form(...),
     size: str = Form("auto"),
-    model: str = Form("gpt-image-2"),
+    model: str = Form(""),
     n: int = Form(1),
     quality: str = Form("auto"),
     output_format: str = Form("png"),

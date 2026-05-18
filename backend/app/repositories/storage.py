@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
 from ..core import settings as config
-from ..core.api_paths import normalize_api_preset
+from ..core.api_paths import default_model_for_api_path, normalize_api_preset
 from ..core.constants import ACTIVE_GENERATE_JOB_STATUSES
 from ..core.observability import observe_job_stage
 from ..core.utils import utc_now
@@ -216,6 +216,7 @@ def _default_settings() -> dict:
                 "api_url": config.DEFAULT_API_URL.rstrip("/"),
                 "api_key": config.DEFAULT_API_KEY,
                 "api_path": config.DEFAULT_API_PATH,
+                "default_model": default_model_for_api_path(config.DEFAULT_API_PATH),
             }
         ],
     }
@@ -389,6 +390,7 @@ def _ensure_database():
                     api_url TEXT NOT NULL,
                     api_key TEXT NOT NULL,
                     api_path TEXT NOT NULL,
+                    default_model TEXT NOT NULL,
                     position INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -464,6 +466,7 @@ def _ensure_database():
                     ON generate_jobs(updated_at DESC);
                 """
             )
+            _migrate_api_presets_schema(conn)
             _migrate_gallery_schema(conn)
             _migrate_generate_jobs_schema(conn)
             _ensure_gallery_fts(conn)
@@ -515,6 +518,28 @@ def _migrate_gallery_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_gallery_entries_size_created_at
             ON gallery_entries(size, created_at DESC)
         """
+    )
+
+
+def _migrate_api_presets_schema(conn: sqlite3.Connection):
+    columns = _table_columns(conn, "api_presets")
+    if "default_model" not in columns:
+        conn.execute("ALTER TABLE api_presets ADD COLUMN default_model TEXT")
+    conn.execute(
+        """
+        UPDATE api_presets
+        SET default_model = CASE
+            WHEN api_path = ? AND ? != '' THEN ?
+            ELSE ?
+        END
+        WHERE default_model IS NULL OR trim(default_model) = ''
+        """,
+        (
+            "/v1/responses",
+            str(config.DEFAULT_RESPONSES_MODEL or "").strip(),
+            str(config.DEFAULT_RESPONSES_MODEL or "").strip(),
+            default_model_for_api_path("/v1/images/generations"),
+        ),
     )
 
 
@@ -602,11 +627,12 @@ def _replace_settings_on_conn(conn: sqlite3.Connection, settings: dict):
                 api_url,
                 api_key,
                 api_path,
+                default_model,
                 position,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 preset["id"],
@@ -614,6 +640,7 @@ def _replace_settings_on_conn(conn: sqlite3.Connection, settings: dict):
                 preset["api_url"],
                 preset["api_key"],
                 preset["api_path"],
+                preset["default_model"],
                 position,
                 now,
                 now,
@@ -635,7 +662,7 @@ def _replace_settings_on_conn(conn: sqlite3.Connection, settings: dict):
 def _load_settings_from_conn(conn: sqlite3.Connection) -> dict | None:
     rows = conn.execute(
         """
-        SELECT id, name, api_url, api_key, api_path
+        SELECT id, name, api_url, api_key, api_path, default_model
         FROM api_presets
         ORDER BY position ASC, id ASC
         """
@@ -650,6 +677,7 @@ def _load_settings_from_conn(conn: sqlite3.Connection) -> dict | None:
             "api_url": row["api_url"],
             "api_key": row["api_key"],
             "api_path": row["api_path"],
+            "default_model": row["default_model"],
         }
         for row in rows
     ]

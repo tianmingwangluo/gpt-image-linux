@@ -17,6 +17,7 @@ from .app_state import (
 )
 from .presets import get_active_preset, get_effective_preset_api_key, get_exception_message, get_upstream_socks5_proxy
 from ..core import settings as config
+from ..core.api_paths import normalize_default_model
 from ..core.observability import JobStageTimer, metrics, use_job_stage_timer
 from ..core import validators as ssrf
 from ..core.constants import ACTIVE_GENERATE_JOB_STATUSES
@@ -397,6 +398,15 @@ def queue_image_job(
     api_url = str(active_preset.get("api_url") or "").rstrip("/")
     api_preset_name = active_preset.get("name") or "Untitled preset"
     resolved_api_path = api_path(active_preset) if callable(api_path) else api_path
+    requested_model = (
+        str(req.model or "").strip()
+        if "model" in getattr(req, "model_fields_set", set())
+        else ""
+    )
+    req.model = requested_model or normalize_default_model(
+        active_preset.get("default_model"),
+        resolved_api_path,
+    )
 
     if not api_url:
         raise HTTPException(

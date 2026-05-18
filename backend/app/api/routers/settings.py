@@ -21,7 +21,7 @@ from ..presets import (
 )
 from ...core import settings as config
 from ...core import validators as ssrf
-from ...core.api_paths import ALLOWED_API_PATHS, build_upstream_url, normalize_api_path
+from ...core.api_paths import ALLOWED_API_PATHS, build_upstream_url, normalize_api_path, normalize_default_model
 from ...integrations import upstream_client as proxy
 from ...schemas.models import (
     PresetCreateRequest,
@@ -49,6 +49,11 @@ async def update_settings(req: SettingsRequest):
     if req.api_key is not None:
         preset["api_key"] = req.api_key.strip()
     preset["api_path"] = normalize_api_path(req.api_path)
+    if req.default_model is not None:
+        preset["default_model"] = normalize_default_model(
+            req.default_model,
+            preset["api_path"],
+        )
     if req.upstream_socks5_proxy is not None:
         current_proxy = get_upstream_socks5_proxy()
         requested_proxy = req.upstream_socks5_proxy.strip()
@@ -87,6 +92,10 @@ async def create_settings_preset(req: PresetCreateRequest):
             req.api_path or source.get("api_path", "/v1/images/generations")
         ),
     }
+    preset["default_model"] = normalize_default_model(
+        req.default_model if req.default_model is not None else source.get("default_model"),
+        preset["api_path"],
+    )
     presets.append(preset)
     apply_api_preset(preset)
     persist_api_settings()

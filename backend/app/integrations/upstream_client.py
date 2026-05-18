@@ -442,7 +442,7 @@ def build_gallery_metadata(
 
 
 def build_responses_request_data(payload: GenerateRequest) -> dict[str, Any]:
-    model = (config.DEFAULT_RESPONSES_MODEL or payload.model or "").strip()
+    model = (payload.model or config.DEFAULT_RESPONSES_MODEL or "").strip()
     return {"prompt": payload.prompt, "model": model or payload.model}
 
 

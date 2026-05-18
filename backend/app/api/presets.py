@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 from .app_state import app
 from ..core import settings as config
-from ..core.api_paths import normalize_api_path, normalize_api_preset
+from ..core.api_paths import normalize_api_path, normalize_api_preset, normalize_default_model
 from ..core.validators import mask_socks5_proxy_url, normalize_socks5_proxy_url
 from ..repositories import storage
 from ..schemas.models import ApiPresetResponse, SettingsResponse
@@ -114,7 +114,12 @@ def load_api_settings():
 def get_api_presets() -> list[dict]:
     presets = getattr(app.state, "api_presets", None)
     if presets:
-        return presets
+        normalized = [
+            normalize_api_preset(preset, str(preset.get("id") or f"preset-{index + 1}"))
+            for index, preset in enumerate(presets)
+        ]
+        app.state.api_presets = normalized
+        return normalized
 
     preset = normalize_api_preset(
         {
@@ -123,6 +128,7 @@ def get_api_presets() -> list[dict]:
             "api_url": getattr(app.state, "api_url", config.DEFAULT_API_URL),
             "api_key": getattr(app.state, "api_key", config.DEFAULT_API_KEY),
             "api_path": getattr(app.state, "api_path", config.DEFAULT_API_PATH),
+            "default_model": getattr(app.state, "default_model", ""),
         }
     )
     app.state.api_presets = [preset]
@@ -154,6 +160,10 @@ def apply_api_preset(preset: dict):
     app.state.api_path = normalize_api_path(
         preset.get("api_path", "/v1/images/generations")
     )
+    app.state.default_model = normalize_default_model(
+        preset.get("default_model"),
+        app.state.api_path,
+    )
     app.state.active_preset_id = preset["id"]
 
 
@@ -182,6 +192,10 @@ def serialize_api_preset(preset: dict) -> ApiPresetResponse:
         api_path=normalize_api_path(
             preset.get("api_path", "/v1/images/generations")
         ),
+        default_model=normalize_default_model(
+            preset.get("default_model"),
+            preset.get("api_path", "/v1/images/generations"),
+        ),
         **key_fields,
     )
 
@@ -195,6 +209,10 @@ def build_settings_response() -> SettingsResponse:
         **key_fields,
         api_path=normalize_api_path(
             active_preset.get("api_path", "/v1/images/generations")
+        ),
+        default_model=normalize_default_model(
+            active_preset.get("default_model"),
+            active_preset.get("api_path", "/v1/images/generations"),
         ),
         **upstream_socks5_proxy_response_fields(),
         presets=[serialize_api_preset(preset) for preset in get_api_presets()],

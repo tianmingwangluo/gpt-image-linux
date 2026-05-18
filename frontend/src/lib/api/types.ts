@@ -7,6 +7,7 @@ export type ApiPreset = {
   name: string;
   api_url: string;
   api_path: ApiPath;
+  default_model: string;
   api_key_masked: string;
   has_api_key: boolean;
   api_key_source: ApiKeySource;
@@ -21,6 +22,7 @@ export type SettingsResponse = {
   api_key_source: ApiKeySource;
   api_key_env_var?: string | null;
   api_path: ApiPath;
+  default_model: string;
   has_upstream_socks5_proxy: boolean;
   upstream_socks5_proxy_masked: string;
   presets: ApiPreset[];
