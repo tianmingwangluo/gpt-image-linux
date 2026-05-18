@@ -111,6 +111,11 @@ function createPreviewStore() {
     update((current) => ({ ...current, loading: false, error: message }));
   }
 
+  function setSubmissionError(error: unknown) {
+    const message = error instanceof Error ? error.message : get(t).messages.requestFailed;
+    update((current) => ({ ...current, loading: false, error: message, job: null }));
+  }
+
   function clearPreview(closeActiveJobSource?: () => void) {
     closeActiveJobSource?.();
     set(initialPreviewState);
@@ -225,17 +230,21 @@ function createPreviewStore() {
     lastAction = 'generate';
     set(makeQueuedPreview(body.prompt, 'generation'));
 
-    const job = await apiFetch<GenerateJobResponse>(
-      '/api/generate',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      },
-      'starting image generation'
-    );
-    trackJob(job.job_id);
-    await loadJobs();
+    try {
+      const job = await apiFetch<GenerateJobResponse>(
+        '/api/generate',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        },
+        'starting image generation'
+      );
+      trackJob(job.job_id);
+      await loadJobs();
+    } catch (error) {
+      setSubmissionError(error);
+    }
   }
 
   async function editImage(
@@ -280,16 +289,20 @@ function createPreviewStore() {
       formData.append(uploadFieldName, source.file, source.file.name);
     });
 
-    const job = await apiFetch<GenerateJobResponse>(
-      endpoint,
-      {
-        method: 'POST',
-        body: formData
-      },
-      'starting image edit'
-    );
-    trackJob(job.job_id);
-    await loadJobs();
+    try {
+      const job = await apiFetch<GenerateJobResponse>(
+        endpoint,
+        {
+          method: 'POST',
+          body: formData
+        },
+        'starting image edit'
+      );
+      trackJob(job.job_id);
+      await loadJobs();
+    } catch (error) {
+      setSubmissionError(error);
+    }
   }
 
   function regenerate(setForm: (form: PromptFormState) => void, generate: () => void, edit: () => void) {

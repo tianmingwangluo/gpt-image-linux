@@ -7,6 +7,7 @@ const PNG_BYTES = Buffer.from(
 
 type MockOptions = {
   authenticated?: boolean;
+  editUploadFailure?: boolean;
   runningJobs?: unknown[];
   historyJobs?: unknown[];
 };
@@ -197,6 +198,10 @@ async function mockApi(page: Page, options: MockOptions = {}) {
       return;
     }
     if (url.pathname === '/api/edits' && request.method() === 'POST') {
+      if (options.editUploadFailure) {
+        await route.fulfill(json({ detail: 'Upload image is required.' }, 422));
+        return;
+      }
       await route.fulfill(json({ job_id: 'job-upload-edited', status: 'queued', stage: 'queued', operation: 'edit' }, 202));
       return;
     }
@@ -335,6 +340,17 @@ test('uploaded edit sources append, submit, and clear', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Upload · second\.png/ })).toBeHidden();
   await page.getByRole('button', { name: 'Edits' }).click();
   await expect(page.getByText('Please upload an image or choose one from gallery first')).toBeVisible();
+});
+
+test('failed edit submit clears the temporary queued preview', async ({ page }) => {
+  await loadApp(page, { editUploadFailure: true });
+
+  await page.getByLabel('Upload edit image').setInputFiles([{ name: 'source.png', mimeType: 'image/png', buffer: PNG_BYTES }]);
+  await page.getByRole('textbox', { name: 'Prompt', exact: true }).fill('browser failed edit prompt');
+  await page.getByRole('button', { name: 'Edits' }).click();
+
+  await expect(page.getByText('Upload image is required. (422)')).toBeVisible();
+  await expect(page.getByText('Queued', { exact: true })).toBeHidden();
 });
 
 test('gallery edit source can be combined with uploaded references', async ({ page }) => {
