@@ -15,6 +15,18 @@ from ..core.utils import utc_now
 logger = logging.getLogger(__name__)
 
 WEBHOOK_USER_AGENT = "gpt-image-panel-webhook"
+_WEBHOOK_RESPONSE_MAX_BYTES = 64 * 1024  # 64 KB
+
+
+async def _drain_response_limited(
+    response: aiohttp.ClientResponse, max_bytes: int
+) -> None:
+    """Read and discard response body up to *max_bytes*, then stop."""
+    total = 0
+    async for chunk in response.content.iter_chunked(8192):
+        total += len(chunk)
+        if total >= max_bytes:
+            break
 
 
 def build_webhook_payload(job: dict[str, Any]) -> dict[str, Any]:
@@ -100,7 +112,7 @@ async def deliver_webhook(webhook_url: str, job: dict[str, Any]):
                     allow_redirects=False,
                 ) as response:
                     ssrf.validate_response_peer_ip(response, "Webhook")
-                    await response.read()
+                    await _drain_response_limited(response, _WEBHOOK_RESPONSE_MAX_BYTES)
                     if 200 <= response.status < 300:
                         logger.info(
                             "Webhook delivered: job_id=%s status=%s attempt=%s",

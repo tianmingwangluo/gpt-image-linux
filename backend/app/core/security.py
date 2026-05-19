@@ -68,8 +68,47 @@ def verify_access_token(token: Optional[str]) -> Optional[datetime]:
     return expires_at
 
 
+def _parse_trusted_proxy_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    raw = config.TRUSTED_PROXY_IPS
+    if not raw:
+        return []
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for entry in raw.replace(";", ",").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+_trusted_proxy_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
+
+
+def is_trusted_proxy(client_host: str) -> bool:
+    """Return True if proxy headers should be trusted for this direct client."""
+    if not config.TRUST_PROXY_HEADERS:
+        return False
+    if not config.TRUSTED_PROXY_IPS:
+        # No restriction configured — trust all (backward compat)
+        return True
+    global _trusted_proxy_networks
+    if _trusted_proxy_networks is None:
+        _trusted_proxy_networks = _parse_trusted_proxy_networks()
+    if not _trusted_proxy_networks:
+        return True  # Parsed to empty = trust all
+    try:
+        addr = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    return any(addr in net for net in _trusted_proxy_networks)
+
+
 def get_client_ip(request: Request) -> str:
-    if config.TRUST_PROXY_HEADERS:
+    client_host = request.client.host if request.client else ""
+    if is_trusted_proxy(client_host):
         forwarded_for = request.headers.get("x-forwarded-for", "")
         if forwarded_for:
             return forwarded_for.split(",", 1)[0].strip()
@@ -78,7 +117,7 @@ def get_client_ip(request: Request) -> str:
         if real_ip:
             return real_ip.strip()
 
-    return request.client.host if request.client else ""
+    return client_host
 
 
 def _allowlist_entries() -> list[str]:

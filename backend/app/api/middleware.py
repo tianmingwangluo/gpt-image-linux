@@ -1,4 +1,5 @@
 from urllib.parse import urlsplit
+import re
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -21,6 +22,7 @@ AUTH_EXEMPT_PREFIXES = ("/_app/",)
 NO_CACHE_PATHS = {"/"}
 NO_CACHE_PREFIXES: tuple[str, ...] = ()
 CSRF_PROTECTED_METHODS = {"POST", "PATCH", "DELETE"}
+_INVALID_HOST_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def apply_security_headers(response: Response) -> Response:
@@ -57,10 +59,21 @@ def normalize_origin(value: str | None) -> str | None:
     return f"{parts.scheme.lower()}://{host}"
 
 
+def _is_valid_forwarded_host(value: str) -> bool:
+    """Reject empty, control-char-containing, or overly long forwarded host values."""
+    if not value or len(value) > 255:
+        return False
+    if _INVALID_HOST_RE.search(value):
+        return False
+    return True
+
+
 def get_request_origin(request: Request) -> str | None:
     scheme = request.url.scheme
     host = request.headers.get("host") or request.url.netloc
-    if config.TRUST_PROXY_HEADERS:
+    if config.TRUST_PROXY_HEADERS and auth.is_trusted_proxy(
+        request.client.host if request.client else ""
+    ):
         forwarded_proto = request.headers.get("x-forwarded-proto")
         if forwarded_proto:
             trusted_scheme = forwarded_proto.split(",", 1)[0].strip().lower()
@@ -68,7 +81,9 @@ def get_request_origin(request: Request) -> str | None:
                 scheme = trusted_scheme
         forwarded_host = request.headers.get("x-forwarded-host")
         if forwarded_host:
-            host = forwarded_host.split(",", 1)[0].strip()
+            candidate = forwarded_host.split(",", 1)[0].strip()
+            if _is_valid_forwarded_host(candidate):
+                host = candidate
 
     return normalize_origin(f"{scheme}://{host}")
 

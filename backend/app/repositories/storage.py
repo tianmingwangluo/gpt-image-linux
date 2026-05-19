@@ -38,6 +38,7 @@ from .image_files import (
 )
 from .thumbnails import (
     create_thumbnail_temp as _create_thumbnail_temp_unlocked,
+    create_thumbnail_temp_from_path as _create_thumbnail_temp_from_path_unlocked,
     delete_thumbnail as _delete_thumbnail_unlocked,
     promote_thumbnail_temp as _promote_thumbnail_temp_unlocked,
     thumbnail_filename_for_image as _thumbnail_filename_for_image,
@@ -1067,12 +1068,11 @@ def ensure_thumbnail_for_image(filename: str) -> str | None:
             return thumbnail_filename
         try:
             image_stat = image_path.stat()
-            image_bytes = image_path.read_bytes()
         except OSError as e:
-            logger.warning("Failed to read image for thumbnail %s: %s", filename, e)
+            logger.warning("Failed to stat image for thumbnail %s: %s", filename, e)
             return None
 
-        prepared_thumbnail = _create_thumbnail_temp_unlocked(image_bytes, filename)
+        prepared_thumbnail = _create_thumbnail_temp_from_path_unlocked(image_path, filename)
         if not prepared_thumbnail:
             return None
 
