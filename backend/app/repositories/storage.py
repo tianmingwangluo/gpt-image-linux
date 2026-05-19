@@ -59,6 +59,7 @@ __all__ = [
     "GalleryPage",
     "add_to_gallery_async",
     "add_to_gallery_sync",
+    "backfill_missing_gallery_bytes",
     "delete_all_gallery_images",
     "delete_gallery_image",
     "delete_gallery_images",
@@ -166,6 +167,7 @@ SQLITE_TIMEOUT_SECONDS = 30.0
 GALLERY_FTS_VERSION_KEY = "gallery_fts_version"
 GALLERY_FTS_VERSION = "trigram-v1"
 GALLERY_FTS_MIN_QUERY_LENGTH = 3
+GALLERY_TOTAL_BYTES_CACHE_SECONDS = 2.0
 
 _db_initialized = False
 _db_init_lock = threading.RLock()
@@ -175,6 +177,8 @@ _thread_local = threading.local()
 
 _filter_options_cache: "GalleryFilterOptions | None" = None
 _filter_options_cache_lock = threading.RLock()
+_gallery_total_bytes_cache: dict[tuple[str, str, tuple[Any, ...]], tuple[float, int]] = {}
+_gallery_total_bytes_cache_lock = threading.RLock()
 _gallery_fts_available: bool | None = None
 
 
@@ -204,6 +208,11 @@ def _invalidate_filter_options_cache():
     global _filter_options_cache
     with _filter_options_cache_lock:
         _filter_options_cache = None
+
+
+def _invalidate_gallery_total_bytes_cache():
+    with _gallery_total_bytes_cache_lock:
+        _gallery_total_bytes_cache.clear()
 
 
 def _default_settings() -> dict:
@@ -425,6 +434,8 @@ def _ensure_database():
                     ON gallery_entries(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_gallery_entries_filename
                     ON gallery_entries(filename);
+                CREATE INDEX IF NOT EXISTS idx_gallery_entries_missing_bytes_filename
+                    ON gallery_entries(filename) WHERE bytes IS NULL;
                 CREATE INDEX IF NOT EXISTS idx_gallery_entries_model_created_at
                     ON gallery_entries(model, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_gallery_entries_preset_created_at
@@ -518,6 +529,12 @@ def _migrate_gallery_schema(conn: sqlite3.Connection):
         """
         CREATE INDEX IF NOT EXISTS idx_gallery_entries_size_created_at
             ON gallery_entries(size, created_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_gallery_entries_missing_bytes_filename
+            ON gallery_entries(filename) WHERE bytes IS NULL
         """
     )
 
@@ -930,6 +947,7 @@ def _insert_gallery_entries_on_conn(
         [_gallery_row_values(entry) for entry in normalized_entries],
     )
     _invalidate_filter_options_cache()
+    _invalidate_gallery_total_bytes_cache()
 
 
 def load_settings() -> dict:
@@ -1251,6 +1269,89 @@ def _stat_image_bytes(filename: str) -> int | None:
         return None
 
 
+def _backfill_gallery_bytes_from_known_rows_on_conn(conn: sqlite3.Connection) -> int:
+    before_changes = conn.total_changes
+    with _transaction(conn):
+        conn.execute(
+            """
+            UPDATE gallery_entries
+            SET bytes = (
+                SELECT MAX(known.bytes)
+                FROM gallery_entries AS known
+                WHERE known.filename = gallery_entries.filename
+                  AND known.bytes IS NOT NULL
+            )
+            WHERE bytes IS NULL
+              AND filename IS NOT NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM gallery_entries AS known
+                  WHERE known.filename = gallery_entries.filename
+                    AND known.bytes IS NOT NULL
+              )
+            """
+        )
+    return conn.total_changes - before_changes
+
+
+def _backfill_gallery_bytes_from_filenames_on_conn(
+    conn: sqlite3.Connection,
+) -> int:
+    rows = conn.execute(
+        """
+        SELECT filename
+        FROM gallery_entries
+        WHERE filename IS NOT NULL
+          AND TRIM(filename) != ''
+          AND bytes IS NULL
+        GROUP BY filename
+        ORDER BY filename ASC
+        """
+    ).fetchall()
+    if not rows:
+        return 0
+
+    backfills: list[tuple[int, str]] = []
+    for row in rows:
+        filename = str(row["filename"] or "").strip()
+        if not filename:
+            continue
+        size = _stat_image_bytes(filename)
+        if size is None:
+            continue
+        backfills.append((size, filename))
+
+    if not backfills:
+        return 0
+
+    before_changes = conn.total_changes
+    with _transaction(conn):
+        conn.executemany(
+            """
+            UPDATE gallery_entries
+            SET bytes = ?
+            WHERE filename = ? AND bytes IS NULL
+            """,
+            backfills,
+        )
+    return conn.total_changes - before_changes
+
+
+def backfill_missing_gallery_bytes() -> int:
+    """Backfill missing gallery byte sizes from disk.
+
+    This is intentionally separated from the gallery request path so
+    /api/gallery?include_total_bytes=true can stay SQL-only.
+    """
+    _ensure_database()
+    with _connect() as conn:
+        updated = _backfill_gallery_bytes_from_known_rows_on_conn(conn)
+        updated += _backfill_gallery_bytes_from_filenames_on_conn(conn)
+    if updated:
+        _invalidate_gallery_total_bytes_cache()
+    return updated
+
+
 def _get_gallery_count_on_conn(
     conn: sqlite3.Connection,
     where_sql: str,
@@ -1275,42 +1376,30 @@ def _get_gallery_total_bytes_on_conn(
     where_sql: str,
     params: Sequence[Any],
 ) -> int:
-    rows = conn.execute(
+    cache_key = (config.DATABASE_FILE, where_sql, tuple(params))
+    now = time.monotonic()
+    with _gallery_total_bytes_cache_lock:
+        cached = _gallery_total_bytes_cache.get(cache_key)
+        if cached and (now - cached[0]) < GALLERY_TOTAL_BYTES_CACHE_SECONDS:
+            return cached[1]
+
+    row = conn.execute(
         f"""
-        SELECT filename, MAX(bytes) AS bytes
-        FROM gallery_entries
-        {where_sql}
-        GROUP BY filename
+        SELECT COALESCE(SUM(bytes), 0) AS total_bytes
+        FROM (
+            SELECT filename, MAX(bytes) AS bytes
+            FROM gallery_entries
+            {where_sql}
+            GROUP BY filename
+        )
+        WHERE bytes IS NOT NULL
         """,
         tuple(params),
-    ).fetchall()
+    ).fetchone()
+    total_bytes = int(row["total_bytes"] or 0) if row else 0
 
-    total_bytes = 0
-    backfills: list[tuple[int, str]] = []
-    for row in rows:
-        filename = row["filename"]
-        if not filename:
-            continue
-        stored_bytes = row["bytes"]
-        if stored_bytes is not None:
-            total_bytes += int(stored_bytes)
-            continue
-        size = _stat_image_bytes(filename)
-        if size is None:
-            continue
-        total_bytes += size
-        backfills.append((size, filename))
-
-    if backfills:
-        with _transaction(conn):
-            conn.executemany(
-                """
-                UPDATE gallery_entries
-                SET bytes = ?
-                WHERE filename = ? AND bytes IS NULL
-                """,
-                backfills,
-            )
+    with _gallery_total_bytes_cache_lock:
+        _gallery_total_bytes_cache[cache_key] = (now, total_bytes)
 
     return total_bytes
 
@@ -1408,12 +1497,20 @@ def update_gallery_entry_hash(filename: str, sha256: str, byte_size: int) -> Non
                 conn.execute(
                     """
                     UPDATE gallery_entries
-                    SET sha256 = ?,
+                    SET sha256 = CASE
+                            WHEN sha256 IS NULL OR sha256 = '' THEN ?
+                            ELSE sha256
+                        END,
                         bytes = COALESCE(bytes, ?)
-                    WHERE filename = ? AND (sha256 IS NULL OR sha256 = '')
+                    WHERE filename = ?
+                      AND (
+                          sha256 IS NULL OR sha256 = ''
+                          OR bytes IS NULL
+                      )
                     """,
                     (sha256, byte_size, filename),
                 )
+                _invalidate_gallery_total_bytes_cache()
     except sqlite3.Error as e:
         logger.warning("Failed to persist sha256 for %s: %s", filename, e)
 
@@ -1637,6 +1734,7 @@ def update_gallery_entry(image_id: str, updates: dict[str, Any]) -> GalleryEntry
                     f"UPDATE gallery_entries SET {assignments} WHERE id = ?",
                     (*allowed_updates.values(), image_id),
                 )
+                _invalidate_gallery_total_bytes_cache()
                 if allowed_updates.keys() & {"model", "api_preset_name", "size"}:
                     _invalidate_filter_options_cache()
                 row = conn.execute(
@@ -1671,6 +1769,7 @@ def update_gallery_entries_favorite(image_ids: list[str], favorite: bool) -> int
                 f"UPDATE gallery_entries SET favorite = ? WHERE id IN ({update_placeholders})",
                 (_normalize_gallery_favorite(favorite), *found_ids),
             )
+            _invalidate_gallery_total_bytes_cache()
             return len(found_ids)
 
 
@@ -1823,6 +1922,7 @@ def sync_gallery_with_image_files() -> int:
                         [(entry_id,) for entry_id in stale_ids],
                     )
                     _invalidate_filter_options_cache()
+                    _invalidate_gallery_total_bytes_cache()
                 return len(stale_ids)
 
 
@@ -1850,6 +1950,7 @@ def _delete_gallery_entries_by_ids(
         tuple(removed_ids),
     )
     _invalidate_filter_options_cache()
+    _invalidate_gallery_total_bytes_cache()
 
     remaining_filenames: set[str] = set()
     if removed_filenames:
@@ -1946,6 +2047,7 @@ def delete_all_gallery_images() -> tuple[int, int]:
 
                 conn.execute("DELETE FROM gallery_entries")
                 _invalidate_filter_options_cache()
+                _invalidate_gallery_total_bytes_cache()
 
     # Files to delete: referenced by gallery OR on disk (union). Each file gets
     # a short lock/recheck so newly imported entries with the same filename win.

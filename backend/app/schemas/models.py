@@ -26,7 +26,14 @@ class ApiPresetResponse(BaseModel):
 class PresetCreateRequest(BaseModel):
     name: Optional[str] = None
     api_url: Optional[str] = None
-    api_key: Optional[str] = None
+    api_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "API key for authentication, or ${ENV_VAR_NAME} to resolve from "
+            "the server environment. Literal keys are stored as plaintext in "
+            "SQLite; env refs are preferred."
+        ),
+    )
     api_path: Optional[ApiPath] = None
     default_model: Optional[str] = None
     source_preset_id: Optional[str] = None
@@ -40,7 +47,8 @@ class SettingsRequest(BaseModel):
         default=None,
         description=(
             "API key for authentication, or ${ENV_VAR_NAME} to resolve from "
-            "the server environment. Omit/null to keep the current key."
+            "the server environment. Literal keys are stored as plaintext in "
+            "SQLite; env refs are preferred. Omit/null to keep the current key."
         ),
     )
     api_path: ApiPath = "/v1/images/generations"

@@ -60,7 +60,7 @@
         class="control-focus relative inline-flex h-10 min-w-10 items-center justify-center rounded-lg px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
         title={$t.header.jobHistory}
         aria-label={$t.header.jobHistory}
-        on:click={onOpenJobs}
+        on:click={() => onOpenJobs()}
       >
         <span class="text-sm font-semibold leading-none">{$t.header.jobs}</span>
         {#if activeJobsCount}
@@ -74,7 +74,7 @@
         class="control-focus inline-flex h-10 min-w-10 items-center justify-center rounded-lg px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
         title={$t.common.settings}
         aria-label={$t.common.settings}
-        on:click={onOpenSettings}
+        on:click={() => onOpenSettings()}
       >
         <span class="text-sm font-semibold leading-none">{$t.header.settingsShort}</span>
       </button>

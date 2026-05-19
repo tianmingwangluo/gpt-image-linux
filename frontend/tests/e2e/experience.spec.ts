@@ -330,6 +330,7 @@ test('settings drawer traps focus and key form controls have accessible names', 
   await expect(drawer).toBeVisible();
   await expect(page.getByLabel('API URL')).toHaveValue('https://api.example.com');
   await expect(page.getByLabel('Default model')).toHaveValue('preset-default-model');
+  await expect(drawer).toContainText('Literal keys are saved as plaintext.');
   await expect(page.getByLabel('Filter prompt')).toBeVisible();
 
   for (let index = 0; index < 12; index += 1) {

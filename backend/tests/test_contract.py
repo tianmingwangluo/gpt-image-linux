@@ -1497,6 +1497,10 @@ def test_download_all_deduplicates_shared_filenames(client):
         metadata={"model": "gpt-image-2"},
     )
 
+    gallery_stats = client.get("/api/gallery?include_total_bytes=true")
+    assert gallery_stats.status_code == 200
+    assert gallery_stats.json()["total_bytes"] == len(PNG_BYTES)
+
     archive = client.get("/api/download-all")
     assert archive.status_code == 200
     with zipfile.ZipFile(io.BytesIO(archive.content)) as zf:
@@ -1507,7 +1511,7 @@ def test_download_all_deduplicates_shared_filenames(client):
         assert "images/dup_1.png" in image_names
 
 
-def test_gallery_total_bytes_backfills_legacy_entries_without_bytes(client):
+def test_gallery_total_bytes_uses_sql_aggregate_without_disk_backfill(client, monkeypatch):
     storage._ensure_database()
     image_path = storage.safe_image_path("legacy-bytes.png")
     assert image_path is not None
@@ -1521,6 +1525,15 @@ def test_gallery_total_bytes_backfills_legacy_entries_without_bytes(client):
         metadata={"model": "gpt-image-2"},
     )
 
+    stat_calls: list[str] = []
+    real_stat = storage._stat_image_bytes
+
+    def tracked_stat(filename: str):
+        stat_calls.append(filename)
+        return real_stat(filename)
+
+    monkeypatch.setattr(storage, "_stat_image_bytes", tracked_stat)
+
     with storage._connect() as conn:
         row = conn.execute(
             "SELECT bytes FROM gallery_entries WHERE id = ?",
@@ -1531,6 +1544,12 @@ def test_gallery_total_bytes_backfills_legacy_entries_without_bytes(client):
     gallery = client.get("/api/gallery")
     assert gallery.status_code == 200
     assert gallery.json()["total_bytes"] == 0
+    assert stat_calls == []
+
+    gallery_stats_before_backfill = client.get("/api/gallery?include_total_bytes=true")
+    assert gallery_stats_before_backfill.status_code == 200
+    assert gallery_stats_before_backfill.json()["total_bytes"] == 0
+    assert stat_calls == []
 
     with storage._connect() as conn:
         row = conn.execute(
@@ -1538,6 +1557,10 @@ def test_gallery_total_bytes_backfills_legacy_entries_without_bytes(client):
             ("legacy-bytes",),
         ).fetchone()
         assert row["bytes"] is None
+
+    updated = storage.backfill_missing_gallery_bytes()
+    assert updated == 1
+    assert stat_calls == ["legacy-bytes.png"]
 
     gallery_stats = client.get("/api/gallery?include_total_bytes=true")
     assert gallery_stats.status_code == 200

@@ -58,6 +58,16 @@ async def lifespan(app: FastAPI):
             "Removed %s stale gallery entries for missing image files",
             removed_gallery_entries,
         )
+    try:
+        backfilled_gallery_bytes = storage.backfill_missing_gallery_bytes()
+    except Exception:
+        logger.warning("Failed to backfill legacy gallery byte sizes", exc_info=True)
+    else:
+        if backfilled_gallery_bytes:
+            logger.info(
+                "Backfilled byte sizes for %s legacy gallery entry record(s)",
+                backfilled_gallery_bytes,
+            )
     presets.load_api_settings()
     app.state.generate_jobs = {}
     app.state.generate_job_tasks = {}

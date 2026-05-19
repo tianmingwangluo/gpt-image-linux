@@ -242,7 +242,7 @@ curl http://localhost:9090/health
 5. enter the API base URL
 6. choose the API path
 7. enter the preset default model; the Generate/Edit form's Model field defaults to the active preset's value
-8. enter the API key, or an env ref such as `${OPENAI_API_KEY}`
+8. enter the API key, or an env ref such as `${OPENAI_API_KEY}`; literal keys are stored as plaintext in SQLite, so prefer env refs
 9. optionally enter a global SOCKS5 proxy such as `socks5://127.0.0.1:1080`
 10. optionally run Health check for the saved preset
 11. click Save Preset
@@ -292,6 +292,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 - checks include API path allowability, HTTPS URL/hostname validation, upstream host allowlist and SSRF DNS/private-IP validation, API key/env-ref presence, and a low-cost `OPTIONS`/`HEAD` upstream probe
 - returned shape is `{ status, checks: [{ name, status, message }] }`, where each status is `ok`, `warning`, or `error`
 - API key env refs use the exact `${ENV_VAR_NAME}` form; the database stores the reference string and generation/edit calls resolve it from the server environment at request time
+- literal API keys are stored as plaintext in SQLite, so env refs are the safer default for anything you expect to keep around
 
 ## Upstream SOCKS5 proxy
 
@@ -327,7 +328,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEFAULT_API_URL` | empty | Pre-fill API base URL; may omit or include `/v1` |
-| `DEFAULT_API_KEY` | empty | Pre-fill API key; may be a literal key or an env ref such as `${OPENAI_API_KEY}` |
+| `DEFAULT_API_KEY` | empty | Pre-fill API key; prefer an env ref such as `${OPENAI_API_KEY}` because literal keys are stored as plaintext in SQLite |
 | `DEFAULT_API_PATH` | `/v1/images/generations` | Default upstream path; supported values are `/v1/images/generations`, `/v1/responses`, and `/v1/chat/completions` |
 | `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | Fallback top-level model used for `/v1/responses` when no request/preset model is provided |
 | `DEFAULT_UPSTREAM_SOCKS5_PROXY` | empty | Optional default global SOCKS5 proxy for generation/edit upstream API calls |
@@ -691,7 +692,7 @@ curl http://localhost:9090/health
 5. 填写 API Base URL
 6. 选择 API Path
 7. 填写该预设的默认模型；Generate/Edit 表单里的 Model 默认值会使用当前预设的值
-8. 填写 API Key，或填写 `${OPENAI_API_KEY}` 这类环境变量引用
+8. 填写 API Key，或填写 `${OPENAI_API_KEY}` 这类环境变量引用；直接填写的 key 会以明文保存到 SQLite，优先用环境变量引用
 9. 可选：填写全局 SOCKS5 代理，例如 `socks5://127.0.0.1:1080`
 10. 可选：对已保存预设执行 Health check
 11. 点击 Save Preset
@@ -741,6 +742,7 @@ curl http://localhost:9090/health
 - 检查项包括 API Path 是否允许、HTTPS URL/hostname、上游 host allowlist、SSRF DNS/内网 IP 校验、API Key/环境变量引用是否可用，以及低成本 `OPTIONS`/`HEAD` 上游探测
 - 返回结构为 `{ status, checks: [{ name, status, message }] }`，状态值为 `ok`、`warning` 或 `error`
 - API Key 环境变量引用必须使用完整的 `${ENV_VAR_NAME}` 格式；数据库只保存引用字符串，生成/编辑请求会在执行时从服务端环境变量解析真实值
+- 直接填写的 API Key 会以明文保存到 SQLite，优先使用环境变量引用
 
 ## 上游 SOCKS5 代理
 
@@ -776,7 +778,7 @@ curl http://localhost:9090/health
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `DEFAULT_API_URL` | 空 | 预填 API Base URL；可以不带或带 `/v1` |
-| `DEFAULT_API_KEY` | 空 | 预填 API Key；可以是真实 key，也可以是 `${OPENAI_API_KEY}` 这类环境变量引用 |
+| `DEFAULT_API_KEY` | 空 | 预填 API Key；优先使用 `${OPENAI_API_KEY}` 这类环境变量引用，直接填写的 key 会以明文保存到 SQLite |
 | `DEFAULT_API_PATH` | `/v1/images/generations` | 默认上游路径；支持 `/v1/images/generations`、`/v1/responses` 和 `/v1/chat/completions` |
 | `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | 当请求/预设没有提供模型时，`/v1/responses` 使用的兜底顶层模型 |
 | `DEFAULT_UPSTREAM_SOCKS5_PROXY` | 空 | 可选的全局 SOCKS5 代理默认值，仅用于生成/编辑的上游 API 请求 |
