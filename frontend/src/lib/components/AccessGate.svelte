@@ -40,6 +40,7 @@
       <form class="mt-5 space-y-4" on:submit|preventDefault={submit}>
         <input
           bind:value={accessKey}
+          name="access_key"
           type="password"
           autocomplete="current-password"
           aria-label={$t.access.title}

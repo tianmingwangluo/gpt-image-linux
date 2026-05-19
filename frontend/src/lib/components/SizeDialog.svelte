@@ -50,7 +50,17 @@
       </div>
 
       <div class="mt-5 flex gap-2">
-        <input bind:value={custom} class="control-focus min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 focus:border-emerald-500" placeholder="1024x1024" />
+        <label for="custom-size" class="sr-only">{$t.common.size}</label>
+        <input
+          bind:value={custom}
+          id="custom-size"
+          name="custom_size"
+          inputmode="numeric"
+          autocomplete="off"
+          aria-label={$t.common.size}
+          class="control-focus min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 focus:border-emerald-500"
+          placeholder="1024x1024"
+        />
         <button type="button" class="control-focus rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500" on:click={() => apply()}>{$t.common.apply}</button>
       </div>
     </div>

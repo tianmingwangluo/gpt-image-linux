@@ -100,8 +100,11 @@
 
   <div class="mb-4 flex flex-wrap gap-2">
     <input
+      type="search"
+      name="gallery_prompt"
       value={filters.prompt}
       placeholder={$t.gallery.filterPrompt}
+      autocomplete="off"
       aria-label={$t.gallery.filterPrompt}
       class="control-focus min-w-[160px] flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500"
       on:input={(event) => onFilter('prompt', event.currentTarget.value)}
