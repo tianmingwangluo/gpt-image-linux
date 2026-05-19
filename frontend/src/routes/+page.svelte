@@ -18,21 +18,20 @@
   import type { GalleryEntry, GenerateJobStatus, SettingsResponse } from '$lib/api/types';
   import { accessStore } from '$lib/stores/access';
   import { confirmStore } from '$lib/stores/confirm';
-  import { galleryStore, readGalleryUrlState, writeGalleryUrlState } from '$lib/stores/gallery';
+  import { editSourceStore, MAX_EDIT_SOURCE_IMAGES } from '$lib/stores/editSource';
+  import { galleryStore } from '$lib/stores/gallery';
+  import { readGalleryUrlState, writeGalleryUrlState } from '$lib/stores/galleryUrlState';
   import { jobsStore } from '$lib/stores/jobs';
-  import { DEFAULT_PROMPT_MODEL, MAX_EDIT_SOURCE_IMAGES, editSourceStore, initialPromptFormState, previewStore, type PromptFormState } from '$lib/stores/preview';
+  import { lightboxStore } from '$lib/stores/lightbox';
+  import { DEFAULT_PROMPT_MODEL, initialPromptFormState, previewStore, type PromptFormState } from '$lib/stores/preview';
   import { settingsStore } from '$lib/stores/settings';
   import { uiStore, type ToastOptions } from '$lib/stores/ui';
+  import { versionStore } from '$lib/stores/version';
   import { copyText, galleryImageSize, imageUrl } from '$lib/utils/format';
+  import { jobToPromptForm } from '$lib/utils/promptForm';
 
-  const VERSION_CHECK_TIMEOUT_MS = 4000;
   type JobsTab = 'running' | 'history';
 
-  let version = '';
-  let latestVersion = '';
-  let versionHasUpdate = false;
-  let releaseUrl: string | null = null;
-  let lightboxImage: GalleryEntry | null = null;
   let jobsTab: JobsTab = 'running';
   let form: PromptFormState = { ...initialPromptFormState };
   let editPicker: EditSourcePicker;
@@ -48,45 +47,6 @@
 
   $: activeJobsCount = $jobsStore.jobs.length;
   $: syncFormModelToActivePreset($settingsStore.settings);
-
-  async function loadVersion() {
-    try {
-      const data = await apiFetch<{ version: string; github_repo?: string; release_url: string | null }>(
-        '/api/version',
-        {},
-        'loading version'
-      );
-      version = data.version;
-      releaseUrl = data.release_url;
-      latestVersion = '';
-      versionHasUpdate = false;
-
-      const latest = await fetchLatestVersion();
-      latestVersion = latest?.latest_version ?? '';
-      versionHasUpdate = Boolean(latest?.has_update);
-    } catch {
-      version = '';
-      latestVersion = '';
-      versionHasUpdate = false;
-      releaseUrl = null;
-    }
-  }
-
-  async function fetchLatestVersion(): Promise<{ latest_version: string | null; has_update: boolean } | null> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), VERSION_CHECK_TIMEOUT_MS);
-    try {
-      return await apiFetch<{ latest_version: string | null; has_update: boolean }>(
-        '/api/version/latest',
-        { signal: controller.signal },
-        'loading latest version'
-      );
-    } catch {
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
 
   async function loadInitialData() {
     await Promise.all([settingsStore.loadSettings(), jobsStore.loadJobs(), applyUrlStateToApp()]);
@@ -105,7 +65,7 @@
     const url = new URL(window.location.href);
     writeGalleryUrlState(url.searchParams, $galleryStore.page, $galleryStore.filters);
 
-    if (lightboxImage) url.searchParams.set('image', lightboxImage.id);
+    if ($lightboxStore.image) url.searchParams.set('image', $lightboxStore.image.id);
     else url.searchParams.delete('image');
 
     if ($uiStore.jobsOpen) url.searchParams.set('jobs', jobsTab);
@@ -137,34 +97,34 @@
   async function syncLightboxFromUrl(imageId: string | null | undefined) {
     const nextImageId = String(imageId || '').trim();
     if (!nextImageId) {
-      lightboxImage = null;
+      lightboxStore.close();
       return;
     }
 
     const existing = $galleryStore.gallery?.images.find((image) => image.id === nextImageId);
     if (existing) {
-      lightboxImage = existing;
+      lightboxStore.open(existing);
       return;
     }
 
     const seq = ++lightboxLookupSeq;
     try {
       const image = await apiFetch<GalleryEntry>(`/api/gallery/${encodeURIComponent(nextImageId)}`, {}, 'loading gallery image');
-      if (seq === lightboxLookupSeq) lightboxImage = image;
+      if (seq === lightboxLookupSeq) lightboxStore.open(image);
     } catch {
       if (seq !== lightboxLookupSeq) return;
-      lightboxImage = null;
+      lightboxStore.close();
       showToast($t.messages.galleryImageNotFound, 'error');
     }
   }
 
   function openLightbox(image: GalleryEntry) {
-    lightboxImage = image;
+    lightboxStore.open(image);
     queueUrlSync('push');
   }
 
   function closeLightbox() {
-    lightboxImage = null;
+    lightboxStore.close();
     queueUrlSync('replace');
   }
 
@@ -293,7 +253,7 @@
 
   function prepareGalleryImageForEdit(image: GalleryEntry) {
     const nextLabel = $t.messages.galleryEditLabel(image.filename);
-    if (!previewStore.setGalleryEditSource(image.id, nextLabel, imageUrl(image.filename), nextLabel)) {
+    if (!editSourceStore.setGallerySource(image.id, nextLabel, imageUrl(image.filename), nextLabel, previewStore.setError)) {
       showToast($t.messages.editSourceLimit(MAX_EDIT_SOURCE_IMAGES), 'error');
       return;
     }
@@ -303,7 +263,7 @@
   }
 
   function handleEditFile(event: Event) {
-    previewStore.handleEditFile(event);
+    editSourceStore.handleFile(event, previewStore.setError);
   }
 
   function openEditPreview(sourceId: string) {
@@ -322,7 +282,7 @@
   }
 
   function clearEditSource() {
-    previewStore.clearEditSource();
+    editSourceStore.clear();
     editPicker?.reset();
     setUi('editPreviewOpen', false);
     editPreviewUrl = '';
@@ -331,15 +291,15 @@
 
   async function batchFavoriteGallery(favorite: boolean) {
     await galleryStore.batchFavorite(favorite, showToast, (ids, nextFavorite) => {
-      if (lightboxImage && ids.includes(lightboxImage.id)) lightboxImage = { ...lightboxImage, favorite: nextFavorite };
+      ids.forEach((id) => lightboxStore.updateFavorite(id, nextFavorite));
     });
   }
 
   async function batchDeleteGallery() {
     await galleryStore.batchDelete(showToast, (ids) => {
-      if (lightboxImage && ids.includes(lightboxImage.id)) closeLightbox();
+      if ($lightboxStore.image && ids.includes($lightboxStore.image.id)) closeLightbox();
       if ($editSourceStore.selectedGalleryImageId && ids.includes($editSourceStore.selectedGalleryImageId)) {
-        previewStore.clearGalleryEditSource($editSourceStore.selectedGalleryImageId);
+        editSourceStore.clearGallerySource($editSourceStore.selectedGalleryImageId);
         setUi('editPreviewOpen', false);
         editPreviewUrl = '';
         editPreviewLabel = '';
@@ -349,7 +309,7 @@
 
   async function toggleFavorite(image: GalleryEntry) {
     await galleryStore.toggleFavorite(image, (next) => {
-      if (lightboxImage?.id === image.id) lightboxImage = next;
+      if ($lightboxStore.image?.id === image.id) lightboxStore.open(next);
     });
   }
 
@@ -358,11 +318,11 @@
       image,
       showToast,
       () => {
-        if (lightboxImage?.id === image.id) closeLightbox();
+        if ($lightboxStore.image?.id === image.id) closeLightbox();
       },
       () => {
         if ($editSourceStore.selectedGalleryImageId === image.id) {
-          previewStore.clearGalleryEditSource(image.id);
+          editSourceStore.clearGallerySource(image.id);
           setUi('editPreviewOpen', false);
           editPreviewUrl = '';
           editPreviewLabel = '';
@@ -374,7 +334,7 @@
   async function deleteAllImages() {
     await galleryStore.deleteAll(showToast, () => {
       closeLightbox();
-      previewStore.clearGalleryEditSource($editSourceStore.selectedGalleryImageId);
+      editSourceStore.clearGallerySource($editSourceStore.selectedGalleryImageId);
       setUi('editPreviewOpen', false);
       editPreviewUrl = '';
       editPreviewLabel = '';
@@ -400,38 +360,14 @@
     showToast($t.messages.imageUrlCopied);
   }
 
-  function normalizeJobQuality(value: string | null | undefined): PromptFormState['quality'] {
-    if (value === 'auto' || value === 'low' || value === 'medium' || value === 'high') return value;
-    return initialPromptFormState.quality;
-  }
-
-  function normalizeJobOutputFormat(value: string | null | undefined): PromptFormState['outputFormat'] {
-    if (value === 'png' || value === 'jpeg' || value === 'webp') return value;
-    return initialPromptFormState.outputFormat;
-  }
-
-  function jobToPromptForm(job: GenerateJobStatus): PromptFormState {
-    return {
-      prompt: job.prompt || '',
-      size: job.size || initialPromptFormState.size,
-      model: job.model || lastActivePresetDefaultModel || initialPromptFormState.model,
-      quality: normalizeJobQuality(job.quality),
-      outputFormat: normalizeJobOutputFormat(job.output_format),
-      outputCompression: job.output_compression === null || job.output_compression === undefined ? '' : String(job.output_compression),
-      quantity: Math.min(Math.max(Number(job.n) || initialPromptFormState.quantity, 1), 10),
-      responseFormat: job.response_format === 'url' || job.response_format === 'b64_json' ? job.response_format : '',
-      webhookUrl: ''
-    };
-  }
-
   function useJobAsPrompt(job: GenerateJobStatus) {
-    form = jobToPromptForm(job);
+    form = jobToPromptForm(job, lastActivePresetDefaultModel);
     closeJobsDrawer();
     showToast($t.messages.jobLoadedIntoPrompt);
   }
 
   function retryJob(job: GenerateJobStatus) {
-    form = jobToPromptForm(job);
+    form = jobToPromptForm(job, lastActivePresetDefaultModel);
     closeJobsDrawer();
     if (job.operation === 'edit') {
       if (!$editSourceStore.files.length && !$editSourceStore.selectedGalleryImageId) {
@@ -450,13 +386,13 @@
     $galleryStore.filters;
     $uiStore.jobsOpen;
     jobsTab;
-    lightboxImage?.id;
+    $lightboxStore.image?.id;
     queueUrlSync();
   }
 
   onMount(() => {
     accessStore.installUnauthorizedHandler();
-    void loadVersion();
+    void versionStore.loadVersion();
     void accessStore.checkAccess(loadInitialData);
 
     const popstate = () => {
@@ -467,7 +403,7 @@
     const keydown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if ($uiStore.editPreviewOpen) setUi('editPreviewOpen', false);
-      else if (lightboxImage) closeLightbox();
+      else if ($lightboxStore.image) closeLightbox();
       else if ($uiStore.sizeDialogOpen) setUi('sizeDialogOpen', false);
       else if ($uiStore.jobsOpen) closeJobsDrawer();
       else if ($uiStore.settingsOpen) setUi('settingsOpen', false);
@@ -490,10 +426,10 @@
 
 <AccessGate visible={$accessStore.gateVisible} error={$accessStore.error} loading={$accessStore.loading} onUnlock={(key) => accessStore.unlockAccess(key, loadInitialData)} />
 <Header
-  {version}
-  {latestVersion}
-  hasVersionUpdate={versionHasUpdate}
-  {releaseUrl}
+  version={$versionStore.version}
+  latestVersion={$versionStore.latestVersion}
+  hasVersionUpdate={$versionStore.hasUpdate}
+  releaseUrl={$versionStore.releaseUrl}
   {activeJobsCount}
   onOpenJobs={openJobsDrawer}
   onOpenSettings={() => setUi('settingsOpen', true)}
@@ -612,8 +548,8 @@
 </main>
 
 <Lightbox
-  open={Boolean(lightboxImage)}
-  image={lightboxImage}
+  open={Boolean($lightboxStore.image)}
+  image={$lightboxStore.image}
   onClose={closeLightbox}
   onEdit={prepareGalleryImageForEdit}
   onFavorite={toggleFavorite}

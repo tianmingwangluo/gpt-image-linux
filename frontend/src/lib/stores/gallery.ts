@@ -2,9 +2,10 @@ import { get, writable } from 'svelte/store';
 import { apiFetch } from '$lib/api/client';
 import { t } from '$lib/i18n';
 import { confirmStore } from '$lib/stores/confirm';
+import { createGalleryActions } from '$lib/stores/galleryActions';
 import type { ToastOptions, ToastVariant } from '$lib/stores/ui';
 import { formatBytes } from '$lib/utils/format';
-import type { GalleryBatchResponse, GalleryEntry, GalleryResponse } from '$lib/api/types';
+import type { GalleryEntry, GalleryResponse } from '$lib/api/types';
 
 export type GalleryFilters = {
   prompt: string;
@@ -66,82 +67,6 @@ function buildGalleryParams(page: number, filters: GalleryFilters, includeTotalB
   return params;
 }
 
-export type GalleryUrlState = {
-  page: number;
-  filters: GalleryFilters;
-};
-
-function parsePage(value: string | null | undefined) {
-  const parsed = Number.parseInt(String(value || ''), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-}
-
-function parseBoolean(value: string | null | undefined) {
-  const normalized = String(value || '').toLowerCase();
-  return normalized === 'true' || normalized === '1';
-}
-
-export function readGalleryUrlState(searchParams: URLSearchParams): GalleryUrlState {
-  return {
-    page: parsePage(searchParams.get('page')),
-    filters: {
-      prompt: searchParams.get('prompt') || '',
-      model: searchParams.get('model') || '',
-      preset: searchParams.get('preset') || '',
-      size: searchParams.get('size') || '',
-      dateFrom: searchParams.get('date_from') || '',
-      dateTo: searchParams.get('date_to') || '',
-      favorite: parseBoolean(searchParams.get('favorite'))
-    }
-  };
-}
-
-export function writeGalleryUrlState(searchParams: URLSearchParams, page: number, filters: GalleryFilters) {
-  searchParams.delete('page');
-  searchParams.delete('prompt');
-  searchParams.delete('model');
-  searchParams.delete('preset');
-  searchParams.delete('size');
-  searchParams.delete('date_from');
-  searchParams.delete('date_to');
-  searchParams.delete('favorite');
-
-  if (page > 1) searchParams.set('page', String(page));
-  if (filters.prompt.trim()) searchParams.set('prompt', filters.prompt.trim());
-  if (filters.model) searchParams.set('model', filters.model);
-  if (filters.preset) searchParams.set('preset', filters.preset);
-  if (filters.size) searchParams.set('size', filters.size);
-  if (filters.dateFrom) searchParams.set('date_from', filters.dateFrom);
-  if (filters.dateTo) searchParams.set('date_to', filters.dateTo);
-  if (filters.favorite) searchParams.set('favorite', 'true');
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function parseHeaderInt(headers: Headers, name: string) {
-  const parsed = Number.parseInt(headers.get(name) || '', 10);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function filenameFromContentDisposition(header: string | null, fallback: string) {
-  const match = header?.match(/filename="?([^";]+)"?/i);
-  return match?.[1] || fallback;
-}
-
-function operationProgressDetail(loaded: number, total: number) {
-  if (total > 0) return `${formatBytes(loaded)} / ${formatBytes(total)}`;
-  return loaded > 0 ? formatBytes(loaded) : '';
-}
-
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === 'AbortError';
 }
@@ -161,46 +86,6 @@ function createGalleryStore() {
 
   function setOperationStatus(operationStatus: GalleryOperationStatus | null) {
     update((current) => ({ ...current, operationStatus }));
-  }
-
-  function batchToastMessage(action: 'delete' | 'favorite', result: GalleryBatchResponse) {
-    const updatedCount = result.updated_count ?? result.count;
-    const missingCount = result.missing_count ?? Math.max(0, (result.requested_count || 0) - updatedCount);
-    if (action === 'delete') return get(t).messages.selectedImagesDeleted(updatedCount, missingCount);
-    return get(t).messages.selectedImagesFavorited(updatedCount, missingCount);
-  }
-
-  async function downloadResponseBlob(
-    response: Response,
-    kind: GalleryOperationStatus['kind'],
-    label: string,
-    initialDetail: string
-  ) {
-    const total = Number.parseInt(response.headers.get('Content-Length') || '0', 10);
-    if (!response.body) return response.blob();
-
-    const reader = response.body.getReader();
-    const chunks: BlobPart[] = [];
-    let loaded = 0;
-    setOperationStatus({ kind, label, detail: initialDetail, progress: total > 0 ? 0 : null });
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      const chunk = new Uint8Array(value.byteLength);
-      chunk.set(value);
-      chunks.push(chunk);
-      loaded += value.byteLength;
-      setOperationStatus({
-        kind,
-        label,
-        detail: operationProgressDetail(loaded, total) || initialDetail,
-        progress: total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : null
-      });
-    }
-
-    return new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/zip' });
   }
 
   function setPageAndFilters(page: number, filters: GalleryFilters) {
@@ -321,119 +206,6 @@ function createGalleryStore() {
     update((current) => ({ ...current, selectedIds: new Set() }));
   }
 
-  async function batchFavorite(favorite: boolean, showToast: (message: string) => void, onAffected?: (ids: string[], favorite: boolean) => void) {
-    const ids = [...state.selectedIds];
-    if (!ids.length) return;
-    const result = await apiFetch<GalleryBatchResponse>(
-      '/api/gallery/batch/favorite',
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids, favorite })
-      },
-      'updating selected favorites'
-    );
-    await loadGallery(state.page);
-    onAffected?.(ids, favorite);
-    showToast(batchToastMessage('favorite', result));
-  }
-
-  async function batchDelete(
-    showToast: (message: string, variant?: ToastVariant, options?: ToastOptions) => void,
-    onDeleted?: (ids: string[]) => void
-  ) {
-    const ids = [...state.selectedIds];
-    if (!ids.length) return;
-    const selectedEntries = state.gallery?.images.filter((image) => ids.includes(image.id)) || [];
-    const selectedBytes = selectedEntries.reduce((sum, image) => sum + (image.bytes || 0), 0);
-    const details = [
-      get(t).confirm.deleteSelectedDetail(ids.length),
-      selectedEntries.length ? get(t).confirm.deleteSelectedSize(formatBytes(selectedBytes)) : ''
-    ].filter(Boolean);
-    const confirmed = await confirmStore.confirm({
-      title: get(t).confirm.deleteSelectedTitle(ids.length),
-      message: get(t).confirm.deleteSelectedMessage(ids.length),
-      details,
-      confirmLabel: get(t).gallery.deleteSelected,
-      cancelLabel: get(t).confirm.cancel,
-      closeLabel: get(t).confirm.closeLabel,
-      variant: 'danger'
-    });
-    if (!confirmed) return;
-    const result = await apiFetch<GalleryBatchResponse>(
-      '/api/gallery/batch/delete',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids })
-      },
-      'deleting selected images'
-    );
-    onDeleted?.(ids);
-    clearSelection();
-    await loadGallery(state.page);
-    showToast(batchToastMessage('delete', result));
-  }
-
-  async function batchDownload(showToast?: (message: string) => void) {
-    const ids = [...state.selectedIds];
-    if (!ids.length) return;
-    setOperationStatus({
-      kind: 'download',
-      label: get(t).gallery.downloadingSelected,
-      detail: get(t).gallery.downloadPreparing(ids.length),
-      progress: null
-    });
-    try {
-      const response = await fetch('/api/gallery/batch/download', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { Accept: 'application/zip', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids })
-      });
-      if (!response.ok) {
-        throw new Error(get(t).messages.requestFailed);
-      }
-      const blob = await downloadResponseBlob(
-        response,
-        'download',
-        get(t).gallery.downloadingSelected,
-        get(t).gallery.browserSavingDownload
-      );
-      downloadBlob(blob, filenameFromContentDisposition(response.headers.get('Content-Disposition'), 'gpt-images-selected.zip'));
-      const requestedCount = parseHeaderInt(response.headers, 'X-Gallery-Requested-Count') || ids.length;
-      const exportedCount = parseHeaderInt(response.headers, 'X-Gallery-Exported-Count') || requestedCount;
-      const missingCount = parseHeaderInt(response.headers, 'X-Gallery-Missing-Count');
-      showToast?.(get(t).messages.selectedImagesDownloaded(exportedCount, missingCount));
-    } finally {
-      setOperationStatus(null);
-    }
-  }
-
-  async function exportArchive(showToast?: (message: string) => void) {
-    setOperationStatus({
-      kind: 'export',
-      label: get(t).gallery.exportingArchive,
-      detail: get(t).gallery.exportPreparing,
-      progress: null
-    });
-    try {
-      const response = await fetch('/api/download-all', {
-        method: 'GET',
-        credentials: 'same-origin',
-        headers: { Accept: 'application/zip' }
-      });
-      if (!response.ok) {
-        throw new Error(get(t).messages.requestFailed);
-      }
-      const blob = await downloadResponseBlob(response, 'export', get(t).gallery.exportingArchive, get(t).gallery.browserSavingDownload);
-      downloadBlob(blob, filenameFromContentDisposition(response.headers.get('Content-Disposition'), 'gpt-images.zip'));
-      showToast?.(get(t).messages.exportReady);
-    } finally {
-      setOperationStatus(null);
-    }
-  }
-
   async function toggleFavorite(image: GalleryEntry, onChanged?: (image: GalleryEntry) => void) {
     await apiFetch<GalleryEntry>(
       `/api/gallery/${encodeURIComponent(image.id)}/favorite`,
@@ -454,6 +226,11 @@ function createGalleryStore() {
     clearTimeout(pending.timer);
     pendingSingleDeletes.delete(imageId);
     return true;
+  }
+
+  function clearPendingSingleDeletes() {
+    pendingSingleDeletes.forEach((pending) => clearTimeout(pending.timer));
+    pendingSingleDeletes.clear();
   }
 
   async function deleteImage(
@@ -517,78 +294,24 @@ function createGalleryStore() {
     });
   }
 
-  async function deleteAll(
-    showToast: (message: string, variant?: ToastVariant, options?: ToastOptions) => void,
-    onDeleted?: () => void
-  ) {
-    const stats = await apiFetch<GalleryResponse>(
-      '/api/gallery?page=1&page_size=1&include_total_bytes=true',
-      {},
-      'loading gallery delete impact'
-    );
-    const confirmed = await confirmStore.confirm({
-      title: get(t).confirm.deleteAllTitle,
-      message: get(t).confirm.deleteAllMessage(stats.total),
-      details: [get(t).confirm.deleteAllDetail(formatBytes(stats.total_bytes)), get(t).confirm.deleteAllConfirmHint],
-      confirmLabel: get(t).confirm.deleteAllConfirmLabel,
-      cancelLabel: get(t).confirm.cancel,
-      closeLabel: get(t).confirm.closeLabel,
-      requiredText: get(t).confirm.deleteAllConfirmLabel,
-      requiredTextLabel: get(t).confirm.deleteAllConfirmHint,
-      variant: 'danger'
-    });
-    if (!confirmed) return;
-
-    pendingSingleDeletes.forEach((pending) => clearTimeout(pending.timer));
-    pendingSingleDeletes.clear();
-    await apiFetch('/api/gallery', { method: 'DELETE' }, 'deleting all images');
-    onDeleted?.();
-    await loadGallery(1);
-    showToast(get(t).messages.allImagesDeleted);
-  }
-
-  async function importArchive(file: File, showToast: (message: string) => void) {
-    const formData = new FormData();
-    formData.append('archive', file, file.name);
-    setOperationStatus({
-      kind: 'import',
-      label: get(t).gallery.importingArchive,
-      detail: get(t).gallery.importingArchiveDetail(formatBytes(file.size)),
-      progress: null
-    });
-    try {
-      const result = await apiFetch<{ status: string; imported: number }>(
-        '/api/import',
-        {
-          method: 'POST',
-          body: formData
-        },
-        'importing archive'
-      );
-      setOperationStatus({
-        kind: 'import',
-        label: get(t).gallery.importingArchive,
-        detail: get(t).gallery.refreshingAfterImport,
-        progress: null
-      });
-      await loadGallery(1);
-      showToast(get(t).messages.imported(result.imported));
-    } finally {
-      setOperationStatus(null);
-    }
-  }
-
   function cleanup() {
     if (filterTimer) clearTimeout(filterTimer);
     filterTimer = null;
-    pendingSingleDeletes.forEach((pending) => clearTimeout(pending.timer));
-    pendingSingleDeletes.clear();
+    clearPendingSingleDeletes();
     requestSeq += 1;
     abortController?.abort();
     abortController = null;
     pendingRequestKey = '';
     setOperationStatus(null);
   }
+
+  const galleryActions = createGalleryActions({
+    getState: () => state,
+    loadGallery,
+    clearSelection,
+    setOperationStatus,
+    clearPendingSingleDeletes
+  });
 
   return {
     subscribe,
@@ -600,14 +323,9 @@ function createGalleryStore() {
     toggleSelection,
     selectPage,
     clearSelection,
-    batchFavorite,
-    batchDelete,
-    batchDownload,
-    exportArchive,
+    ...galleryActions,
     toggleFavorite,
     deleteImage,
-    deleteAll,
-    importArchive,
     cancelPendingSingleDelete,
     cleanup
   };

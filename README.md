@@ -529,7 +529,7 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 - Tailwind CSS
 - `src/lib/api/client.ts` 封装同源 `/api/*` fetch
 - `src/lib/api/events.ts` 封装 SSE
-- stores 拆分为 access、settings、gallery、jobs、preview 和 UI
+- stores 拆分为 access、settings、gallery、gallery actions、edit source、jobs、preview、lightbox、version 和 UI
 - 组件拆分为 access、header、settings drawer、job history drawer、preview、gallery、lightbox 和 size dialog
 
 前端构建命令：
