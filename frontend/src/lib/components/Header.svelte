@@ -57,7 +57,7 @@
     <div class="flex items-center gap-2">
       <button
         type="button"
-        class="control-focus relative rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+        class="control-focus relative inline-flex h-10 min-w-10 items-center justify-center rounded-lg px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
         title={$t.header.jobHistory}
         aria-label={$t.header.jobHistory}
         on:click={onOpenJobs}
@@ -71,7 +71,7 @@
       </button>
       <button
         type="button"
-        class="control-focus rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+        class="control-focus inline-flex h-10 min-w-10 items-center justify-center rounded-lg px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
         title={$t.common.settings}
         aria-label={$t.common.settings}
         on:click={onOpenSettings}
