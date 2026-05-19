@@ -339,8 +339,11 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 | `DEFAULT_API_PATH` | `/v1/images/generations` | Default upstream path; supported values are `/v1/images/generations`, `/v1/responses`, and `/v1/chat/completions` |
 | `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | Fallback top-level model used for `/v1/responses` when no request/preset model is provided |
 | `DEFAULT_UPSTREAM_SOCKS5_PROXY` | empty | Optional default global SOCKS5 proxy for generation/edit upstream API calls |
-| `APP_VERSION` | `VERSION` file | Override the app version shown in the UI and returned by `/api/version` |
+| `APP_VERSION` | `VERSION` file | Override the app version shown in the UI and returned by `/api/version`; read on each request |
 | `GITHUB_REPO` | `Z1rconium/gpt-image-linux` | GitHub `owner/repo` used for latest-release update detection; set empty to disable latest-version checks |
+| `ENABLE_VERSION_CHECK` | `true` | Enable per-request GitHub latest-version checks for the header `New` badge |
+| `VERSION_CHECK_TIMEOUT_SECONDS` | `3` | Timeout for each GitHub latest release or branch `VERSION` request |
+| `VERSION_CHECK_BRANCH` | `main` | Branch used for the fallback raw `VERSION` file check |
 | `ENABLE_METRICS` | `false` | Enable `/api/metrics` JSON counters/gauges/rates/latency summaries and Prometheus text output |
 | `SLOW_GALLERY_QUERY_MS` | `200` | Log `/api/gallery` requests at or above this threshold with filters, page, total, and DB query time |
 | `ACCESS_KEY` | empty | Required by default; all non-health routes require unlock when set |
@@ -408,7 +411,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 
 ## Runtime behavior notes
 
-- app version comes from `APP_VERSION` then `VERSION`; optional GitHub remote check reads the latest release first, falls back to the configured branch `VERSION`, and can show a `New` badge without blocking usage
+- app version comes from `APP_VERSION` then `VERSION`; both the local app version and optional GitHub remote check are evaluated on each web-triggered version request. The remote check reads the latest release first, falls back to the configured branch `VERSION`, and can show a `New` badge without blocking usage.
 - presets and gallery/job data persist only in `DATABASE_FILE`
 - SQLite repository operations use short-lived connections with WAL enabled at startup; app shutdown and tests call the storage close hook so connection lifecycle stays explicit
 - generation and edit share one queue (`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`), all edit source images are staged under `DATA_DIR/edit-sources` and additionally capped by `MAX_PENDING_EDIT_SOURCE_MB`, support cancellation, and persist terminal history including `completed_at`
@@ -798,8 +801,11 @@ curl http://localhost:9090/health
 | `DEFAULT_API_PATH` | `/v1/images/generations` | 默认上游路径；支持 `/v1/images/generations`、`/v1/responses` 和 `/v1/chat/completions` |
 | `DEFAULT_RESPONSES_MODEL` | `gpt-5.4` | 当请求/预设没有提供模型时，`/v1/responses` 使用的兜底顶层模型 |
 | `DEFAULT_UPSTREAM_SOCKS5_PROXY` | 空 | 可选的全局 SOCKS5 代理默认值，仅用于生成/编辑的上游 API 请求 |
-| `APP_VERSION` | `VERSION` 文件 | 覆盖界面显示和 `/api/version` 返回的当前应用版本 |
+| `APP_VERSION` | `VERSION` 文件 | 覆盖界面显示和 `/api/version` 返回的当前应用版本；每次请求实时读取 |
 | `GITHUB_REPO` | `Z1rconium/gpt-image-linux` | 用于检测 latest release 新版本的 GitHub `owner/repo`；设为空可禁用最新版本检查 |
+| `ENABLE_VERSION_CHECK` | `true` | 启用每次请求的 GitHub 最新版本检测，用于 Header 的 `New` 标记 |
+| `VERSION_CHECK_TIMEOUT_SECONDS` | `3` | 每次请求 GitHub latest release 或分支 `VERSION` 的超时时间 |
+| `VERSION_CHECK_BRANCH` | `main` | latest release 失败后，用于回退读取 raw `VERSION` 文件的分支 |
 | `ENABLE_METRICS` | `false` | 启用 `/api/metrics` JSON counters/gauges/rates/延迟摘要和 Prometheus 文本输出 |
 | `SLOW_GALLERY_QUERY_MS` | `200` | `/api/gallery` 达到该阈值时记录筛选条件、页码、total 和 DB 查询耗时 |
 | `ACCESS_KEY` | 空 | 默认要求设置；设置后每个非健康路由均需解锁 |
@@ -867,7 +873,7 @@ curl http://localhost:9090/health
 
 ## 运行时注意事项
 
-- 版本读取顺序是 `APP_VERSION` -> `VERSION`；可选 GitHub 远端检查会先读 latest release，再回退到配置分支的 `VERSION`，仅用于显示 `New`，不会阻塞使用
+- 版本读取顺序是 `APP_VERSION` -> `VERSION`；本地版本和可选 GitHub 远端检查都会在每次 Web 端触发版本请求时实时计算。远端检查会先读 latest release，再回退到配置分支的 `VERSION`，仅用于显示 `New`，不会阻塞使用。
 - 预设与 Gallery/Job 数据只保存在 `DATABASE_FILE`
 - SQLite 仓储操作使用短连接，并在启动时启用 WAL；应用 shutdown 和测试 reset 会调用 storage close hook，连接生命周期保持显式
 - 生成与编辑共用队列（`MAX_ACTIVE_GENERATE_JOBS` + `MAX_QUEUED_GENERATE_JOBS`）；所有编辑源图先落到 `DATA_DIR/edit-sources` 并额外受 `MAX_PENDING_EDIT_SOURCE_MB` 总量限制；支持取消，并持久化终态历史（含 `completed_at`）

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from typing import Any
 
 import aiohttp
@@ -23,12 +22,6 @@ _LATEST_RELEASE_URL_TEMPLATE = "https://api.github.com/repos/{repo}/releases/lat
 _VERSION_CHECK_HEADERS = {
     "Accept": "application/vnd.github+json",
     "User-Agent": "gpt-image-linux-version-check",
-}
-_LATEST_VERSION_LOCK = asyncio.Lock()
-_latest_version_cache: dict[str, object] = {
-    "repo": None,
-    "value": None,
-    "fetched_at": 0.0,
 }
 
 
@@ -107,6 +100,10 @@ async def _fetch_latest_version_text(repo: str) -> str | None:
     return await _fetch_branch_version_text(repo)
 
 
+def _current_app_version() -> str:
+    return config.read_app_version()
+
+
 @router.get("/favicon.ico")
 async def favicon():
     frontend_favicon = get_frontend_build_dir() / "favicon.ico"
@@ -143,7 +140,7 @@ async def version():
         else None
     )
     return VersionResponse(
-        version=config.APP_VERSION,
+        version=_current_app_version(),
         github_repo=config.GITHUB_REPO,
         release_url=release_url,
     )
@@ -155,31 +152,13 @@ async def latest_version():
         return LatestVersionResponse(latest_version=None, has_update=False, checked_at=None)
 
     repo = config.GITHUB_REPO
-    now = time.monotonic()
-    cached_repo = _latest_version_cache.get("repo")
-    cached_value = _latest_version_cache.get("value")
-    cached_at = float(_latest_version_cache.get("fetched_at") or 0.0)
-    if cached_repo == repo and cached_value and (now - cached_at) < config.VERSION_CHECK_CACHE_SECONDS:
-        latest = str(cached_value)
-    else:
-        async with _LATEST_VERSION_LOCK:
-            cached_repo = _latest_version_cache.get("repo")
-            cached_value = _latest_version_cache.get("value")
-            cached_at = float(_latest_version_cache.get("fetched_at") or 0.0)
-            if cached_repo == repo and cached_value and (time.monotonic() - cached_at) < config.VERSION_CHECK_CACHE_SECONDS:
-                latest = str(cached_value)
-            else:
-                fetched = await _fetch_latest_version_text(repo)
-                if fetched:
-                    _latest_version_cache["repo"] = repo
-                    _latest_version_cache["value"] = fetched
-                    _latest_version_cache["fetched_at"] = time.monotonic()
-                latest = fetched or (str(cached_value) if cached_repo == repo and cached_value else "")
+    current_version = _current_app_version()
+    latest = await _fetch_latest_version_text(repo)
 
     if not latest:
         return LatestVersionResponse(latest_version=None, has_update=False, checked_at=None)
 
-    has_update = _compare_versions(latest, config.APP_VERSION) > 0
+    has_update = _compare_versions(latest, current_version) > 0
     return LatestVersionResponse(
         latest_version=latest,
         has_update=has_update,

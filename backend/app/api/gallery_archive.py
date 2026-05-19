@@ -128,7 +128,7 @@ def build_gallery_export_metadata(
         "exported_at": exported_at,
         "app": {
             "name": "gpt-image-linux",
-            "version": config.APP_VERSION,
+            "version": config.read_app_version(),
         },
         "images": images,
     }
