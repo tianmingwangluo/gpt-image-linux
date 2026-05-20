@@ -49,7 +49,7 @@
   </div>
 
   <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
-    <div class="min-w-0">
+    <div class="min-w-0 h-full flex flex-col">
       <div class="mb-2 flex items-center justify-between gap-3">
         <label for="prompt" class="text-xs font-medium text-zinc-400">{$t.common.prompt}</label>
         <button
@@ -71,9 +71,9 @@
         autocomplete="off"
         aria-label={$t.common.prompt}
         placeholder={$t.promptForm.placeholder}
-        class="control-focus w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm leading-6 text-zinc-100 focus:border-emerald-500"
+        class="control-focus min-h-[13rem] flex-1 w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm leading-6 text-zinc-100 focus:border-emerald-500"
       ></textarea>
-      <div class="mt-2 flex justify-end text-xs text-zinc-500">{promptLen}/4000</div>
+      <div class="mt-auto pt-2 flex justify-end text-xs text-zinc-500">{promptLen}/4000</div>
     </div>
 
     <PromptHelperPanel onAppend={onAppendPromptTag} />
