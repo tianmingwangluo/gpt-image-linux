@@ -167,6 +167,7 @@ INTEGER_GENERATE_JOB_COLUMNS = {
 }
 SETTINGS_ACTIVE_PRESET_KEY = "active_preset_id"
 UPSTREAM_SOCKS5_PROXY_KEY = "upstream_socks5_proxy"
+WEBHOOK_URL_KEY = "webhook_url"
 PROMPT_OPTIMIZER_SETTINGS_KEY = "prompt_optimizer_settings"
 SQLITE_TIMEOUT_SECONDS = 30.0
 GALLERY_FTS_VERSION_KEY = "gallery_fts_version"
@@ -223,6 +224,7 @@ def _default_settings() -> dict:
     return {
         "active_preset_id": "default",
         "upstream_socks5_proxy": config.DEFAULT_UPSTREAM_SOCKS5_PROXY,
+        "webhook_url": "",
         "presets": [
             {
                 "id": "default",
@@ -639,11 +641,17 @@ def _normalize_settings(settings: dict | None) -> dict:
         if settings.get("upstream_socks5_proxy") is not None
         else config.DEFAULT_UPSTREAM_SOCKS5_PROXY
     )
+    webhook_url = (
+        str(settings.get("webhook_url")).strip()
+        if settings.get("webhook_url") is not None
+        else ""
+    )
 
     raw_presets = settings.get("presets")
     if not isinstance(raw_presets, list):
         default_settings = _default_settings()
         default_settings["upstream_socks5_proxy"] = upstream_socks5_proxy
+        default_settings["webhook_url"] = webhook_url
         return default_settings
 
     presets: list[dict] = []
@@ -662,6 +670,7 @@ def _normalize_settings(settings: dict | None) -> dict:
     if not presets:
         default_settings = _default_settings()
         default_settings["upstream_socks5_proxy"] = upstream_socks5_proxy
+        default_settings["webhook_url"] = webhook_url
         return default_settings
 
     active_preset_id = str(settings.get("active_preset_id") or presets[0]["id"])
@@ -671,6 +680,7 @@ def _normalize_settings(settings: dict | None) -> dict:
     return {
         "active_preset_id": active_preset_id,
         "upstream_socks5_proxy": upstream_socks5_proxy,
+        "webhook_url": webhook_url,
         "presets": presets,
         "prompt_optimizer": (
             _normalize_prompt_optimizer_settings(settings.get("prompt_optimizer"))
@@ -724,6 +734,11 @@ def _replace_settings_on_conn(conn: sqlite3.Connection, settings: dict):
         UPSTREAM_SOCKS5_PROXY_KEY,
         normalized.get("upstream_socks5_proxy", ""),
     )
+    _set_setting_value(
+        conn,
+        WEBHOOK_URL_KEY,
+        normalized.get("webhook_url", ""),
+    )
     optimizer = normalized.get("prompt_optimizer")
     if optimizer is not None:
         _set_setting_value(conn, PROMPT_OPTIMIZER_SETTINGS_KEY, json.dumps(optimizer))
@@ -757,6 +772,7 @@ def _load_settings_from_conn(conn: sqlite3.Connection) -> dict | None:
     upstream_socks5_proxy = _get_setting_value(conn, UPSTREAM_SOCKS5_PROXY_KEY)
     if upstream_socks5_proxy is None:
         upstream_socks5_proxy = config.DEFAULT_UPSTREAM_SOCKS5_PROXY
+    webhook_url = _get_setting_value(conn, WEBHOOK_URL_KEY) or ""
 
     optimizer_json = _get_setting_value(conn, PROMPT_OPTIMIZER_SETTINGS_KEY)
     optimizer = None
@@ -771,6 +787,7 @@ def _load_settings_from_conn(conn: sqlite3.Connection) -> dict | None:
     return {
         "active_preset_id": active_preset_id,
         "upstream_socks5_proxy": upstream_socks5_proxy,
+        "webhook_url": webhook_url,
         "presets": presets,
         "prompt_optimizer": optimizer,
     }

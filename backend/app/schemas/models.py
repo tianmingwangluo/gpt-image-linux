@@ -1,10 +1,9 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal, Optional
 from datetime import datetime
-from urllib.parse import urlparse
 
 from ..core.api_paths import DEFAULT_IMAGE_MODEL
-from ..core.validators import normalize_socks5_proxy_url
+from ..core.validators import normalize_socks5_proxy_url, normalize_webhook_url
 
 ApiPath = Literal["/v1/images/generations", "/v1/responses", "/v1/chat/completions"]
 ApiKeySource = Literal["empty", "stored", "env"]
@@ -69,6 +68,14 @@ class SettingsRequest(BaseModel):
             "Null keeps the current value; an empty string clears it."
         ),
     )
+    webhook_url: Optional[str] = Field(
+        default=None,
+        max_length=2048,
+        description=(
+            "Optional global HTTPS webhook callback URL for completed generation/edit jobs. "
+            "Null keeps the current value; an empty string clears it."
+        ),
+    )
     prompt_optimizer: Optional["PromptOptimizerSettingsRequest"] = None
 
     @field_validator("upstream_socks5_proxy")
@@ -77,6 +84,13 @@ class SettingsRequest(BaseModel):
         if value is None:
             return None
         return normalize_socks5_proxy_url(value)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def validate_settings_webhook_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return normalize_webhook_url(value)
 
 
 class SettingsResponse(BaseModel):
@@ -90,6 +104,8 @@ class SettingsResponse(BaseModel):
     default_model: str
     has_upstream_socks5_proxy: bool = False
     upstream_socks5_proxy_masked: str = ""
+    has_webhook_url: bool = False
+    webhook_url_masked: str = ""
     presets: list[ApiPresetResponse]
     prompt_optimizer: "PromptOptimizerSettingsResponse" = Field(default_factory=lambda: PromptOptimizerSettingsResponse())
 
@@ -204,17 +220,8 @@ class GenerateRequest(BaseModel):
     @field_validator("webhook_url")
     @classmethod
     def validate_webhook_url(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        webhook_url = value.strip()
-        if not webhook_url:
-            return None
-        parsed = urlparse(webhook_url)
-        if parsed.scheme != "https":
-            raise ValueError("webhook_url must use https://")
-        if not parsed.hostname:
-            raise ValueError("webhook_url must include a hostname")
-        return webhook_url
+        normalized = normalize_webhook_url(value)
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_output_options(self) -> "GenerateRequest":

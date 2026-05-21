@@ -94,6 +94,8 @@ const settingsResponse = {
   default_model: 'preset-default-model',
   has_upstream_socks5_proxy: false,
   upstream_socks5_proxy_masked: '',
+  has_webhook_url: true,
+  webhook_url_masked: 'https://hooks.example.com/***',
   prompt_optimizer: {
     enabled: true,
     api_url: 'https://example.com/v1/chat/completions',
@@ -412,6 +414,7 @@ test('settings drawer traps focus and key form controls have accessible names', 
   await expect(drawer).toBeVisible();
   await expect(page.getByLabel('API URL')).toHaveValue('https://api.example.com');
   await expect(page.getByLabel('Default model')).toHaveValue('preset-default-model');
+  await expect(page.getByLabel('Webhook URL')).toHaveValue('https://hooks.example.com/***');
   await expect(drawer).toContainText('Literal keys are saved as plaintext.');
   await expect(page.getByLabel('Filter prompt')).toBeVisible();
 

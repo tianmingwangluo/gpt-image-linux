@@ -34,12 +34,12 @@ Key characteristics:
 
 ## Features
 
-- API preset management: base URL/path/key, per-preset default model, and global SOCKS5 upstream proxy
+- API preset management: base URL/path/key, per-preset default model, global SOCKS5 upstream proxy, and global Webhook URL
 - prompt helper tags, server-side prompt optimization, and gallery prompt/parameter reuse
 - generation and image-editing (`/v1/images/edits`) with size/quality/format/compression/quantity controls and up to 16 edit reference images
 - preview + job history with SSE progress, multi-image result previews, `completed_at`, elapsed time, per-job stage timings, loading states, detailed terminal statuses, cancel for queued/running jobs, and reuse/retry from persisted history
 - shared queue and concurrency limits for generation/edit jobs
-- optional per-job `webhook_url` with HTTPS-only validation, SSRF checks, signing, and retry
+- optional global Webhook URL with HTTPS-only validation, SSRF checks, signing, retry, and masked settings responses
 - gallery with filters (FTS-backed prompt search, model, preset, size, date range, favorite), URL-synced page/filter/lightbox/job-history state, direct page-number jump, lightbox, “Edit this image”, download, custom delete confirmations with 5-second undo for single images, batch actions with partial-success feedback, delete/delete-all, prompt/image-url copy, and on-demand total-size metadata
 - ZIP export/import (`metadata.json`) with streaming upload, safety validation, low-memory export path, skipped-entry metadata for partial batch downloads, and visible import/export/download progress states
 - access-key gate, IP allowlist/proxy-header support, GitHub version badge, and CSP nonce injection
@@ -251,18 +251,19 @@ curl http://localhost:9090/health
 7. enter the preset default model; the Generate/Edit form's Model field defaults to the active preset's value
 8. enter the API key, or an env ref such as `${OPENAI_API_KEY}`; literal keys are stored as plaintext in SQLite, so prefer env refs
 9. optionally enter a global SOCKS5 proxy such as `socks5://127.0.0.1:1080`
-10. optionally configure Prompt Optimizer with an endpoint URL, model, and API key/env ref
-11. optionally run Health check for the saved preset
-12. click Save Preset
-13. enter a prompt
-14. click Prompt Helper tags to append common modifiers
-15. click Optimize to rewrite the prompt through the server-side optimizer
-16. choose generation options, including API path for per-request upstream routing
-17. click Generate
-18. optionally upload one or more edit reference images, pick "Edit this image" in Gallery/Lightbox, or combine both; uploads append to the current edit sources and Clear removes all edit sources
-19. click Edits to run image-to-image
-20. use Gallery/Lightbox "Use prompt" or "Use all" to reuse historical prompt text or full parameters
-21. view preview and gallery
+10. optionally enter a global Webhook URL for completed generation/edit jobs
+11. optionally configure Prompt Optimizer with an endpoint URL, model, and API key/env ref
+12. optionally run Health check for the saved preset
+13. click Save Preset
+14. enter a prompt
+15. click Prompt Helper tags to append common modifiers
+16. click Optimize to rewrite the prompt through the server-side optimizer
+17. choose generation options, including API path for per-request upstream routing
+18. click Generate
+19. optionally upload one or more edit reference images, pick "Edit this image" in Gallery/Lightbox, or combine both; uploads append to the current edit sources and Clear removes all edit sources
+20. click Edits to run image-to-image
+21. use Gallery/Lightbox "Use prompt" or "Use all" to reuse historical prompt text or full parameters
+22. view preview and gallery
 
 ## API paths
 
@@ -311,6 +312,13 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 - Leave it empty for direct upstream API calls.
 - Use `socks5://host:port` or `socks5://user:pass@host:port`; stored proxy passwords are masked in API responses and the UI.
 - The proxy boundary is intentionally narrow: only generation/edit upstream API `POST` calls use it. Preset health checks, webhooks, version checks, frontend `/api/*` requests, and image URL downloads stay direct.
+
+## Global Webhook URL
+
+- The Settings drawer has one global `Webhook URL` field directly below `SOCKS5 proxy`; it is independent of API presets.
+- Leave it empty to disable job callbacks.
+- When configured, completed generation/edit jobs send signed webhook callbacks to that HTTPS URL.
+- `WEBHOOK_SIGNING_SECRET` is required when a Webhook URL is configured. Stored webhook URLs are masked in API responses and the UI.
 
 ## Image size modes
 
@@ -380,7 +388,7 @@ The panel supports these upstream paths. The API base URL may either omit or inc
 | `DATABASE_FILE` | `./data/app.sqlite3` | SQLite database for gallery metadata and API presets |
 | `PYTHON_BASE_IMAGE` | `python:3.11-slim` | Docker build base image; override when Docker Hub is slow or blocked |
 | `NODE_BASE_IMAGE` | `node:24-alpine` | Docker frontend build base image; override when Docker Hub is slow or blocked |
-| `WEBHOOK_SIGNING_SECRET` | empty | Required when `webhook_url` is used; used to sign webhook payloads (`X-Webhook-Signature`) |
+| `WEBHOOK_SIGNING_SECRET` | empty | Required when a global Webhook URL is configured; used to sign webhook payloads (`X-Webhook-Signature`) |
 | `WEBHOOK_HOST_ALLOWLIST` | empty | Optional comma-separated webhook hostname allowlist |
 | `WEBHOOK_TIMEOUT_SECONDS` | `5` | Webhook delivery timeout per attempt (seconds) |
 | `WEBHOOK_MAX_ATTEMPTS` | `3` | Max webhook delivery retry attempts |
@@ -510,12 +518,12 @@ GPT Image Panel 是一个轻量级 FastAPI Web 界面，用于图像生成和图
 
 ## 功能
 
-- API 预设管理：base URL/path/key、每个预设的默认 model、全局 SOCKS5 上游代理
+- API 预设管理：base URL/path/key、每个预设的默认 model、全局 SOCKS5 上游代理和全局 Webhook URL
 - 提示词助手标签、服务端提示词优化器，以及 Gallery 提示词/参数复用
 - 图像生成 + 图生图编辑（`/v1/images/edits`），支持尺寸/质量/格式/压缩率/数量等参数，并支持最多 16 张编辑参考图
 - 预览 + 历史任务：SSE 进度、多图结果预览、`completed_at`、耗时、任务分段耗时、加载状态、细分终态状态、排队/运行任务取消，以及从持久化历史复用/重试
 - 生成与编辑共享并发和排队限制
-- 可选任务回调 `webhook_url`：HTTPS 校验、SSRF 防护、签名与重试
+- 可选全局 Webhook URL：HTTPS 校验、SSRF 防护、签名、重试，以及设置响应打码
 - Gallery：筛选（FTS 提示词搜索、模型、预设、尺寸、日期区间、收藏）、URL 同步的 page/filter/lightbox/job history 状态、页码输入跳转、Lightbox、”Edit this image”、下载/删除、批量操作部分成功反馈、单图 5 秒撤销删除、复制提示词/图片链接、按需总大小统计
 - ZIP 导出导入（含 `metadata.json`）+ 流式上传 + 安全校验 + 低内存导出路径 + 批量下载 skipped metadata + 可见导入/导出/下载进度状态
 - 访问密钥、IP 白名单/反向代理头、版本检测、CSP nonce
@@ -727,18 +735,19 @@ curl http://localhost:9090/health
 7. 填写该预设的默认模型；Generate/Edit 表单里的 Model 默认值会使用当前预设的值
 8. 填写 API Key，或填写 `${OPENAI_API_KEY}` 这类环境变量引用；直接填写的 key 会以明文保存到 SQLite，优先用环境变量引用
 9. 可选：填写全局 SOCKS5 代理，例如 `socks5://127.0.0.1:1080`
-10. 可选：配置提示词优化器的 endpoint URL、模型和 API Key/环境变量引用
-11. 可选：对已保存预设执行 Health check
-12. 点击 Save Preset
-13. 输入提示词
-14. 点击提示词助手标签追加常用修饰词
-15. 点击 Optimize 通过服务端优化器改写提示词
-16. 选择生成参数；需要逐次复用不同上游路径时可直接选择 API Path
-17. 点击 Generate
-18. 也可以上传一张或多张编辑参考图、在 Gallery/Lightbox 中选择 “Edit this image”，或两者组合；上传会追加到当前编辑源，Clear 会清空全部编辑源
-19. 点击 Edits 执行图生图
-20. 在 Gallery/Lightbox 使用 “Use prompt” 或 “Use all” 复用历史提示词或完整参数
-21. 查看预览和 Gallery
+10. 可选：填写全局 Webhook URL，用于生成/编辑任务完成回调
+11. 可选：配置提示词优化器的 endpoint URL、模型和 API Key/环境变量引用
+12. 可选：对已保存预设执行 Health check
+13. 点击 Save Preset
+14. 输入提示词
+15. 点击提示词助手标签追加常用修饰词
+16. 点击 Optimize 通过服务端优化器改写提示词
+17. 选择生成参数；需要逐次复用不同上游路径时可直接选择 API Path
+18. 点击 Generate
+19. 也可以上传一张或多张编辑参考图、在 Gallery/Lightbox 中选择 “Edit this image”，或两者组合；上传会追加到当前编辑源，Clear 会清空全部编辑源
+20. 点击 Edits 执行图生图
+21. 在 Gallery/Lightbox 使用 “Use prompt” 或 “Use all” 复用历史提示词或完整参数
+22. 查看预览和 Gallery
 
 ## 支持的 API Path
 
@@ -787,6 +796,13 @@ curl http://localhost:9090/health
 - 留空时生成/编辑上游 API 请求保持直连。
 - 支持 `socks5://host:port` 或 `socks5://user:pass@host:port`；保存后的代理密码会在 API 响应和 UI 中打码。
 - 代理边界刻意收窄：只有生成/编辑的上游 API `POST` 请求会使用 SOCKS5。Preset health check、Webhook、版本检查、前端 `/api/*` 请求和上游返回的图片 URL 下载都保持直连。
+
+## 全局 Webhook URL
+
+- Settings 抽屉在 `SOCKS5 代理` 下方提供一个全局 `Webhook URL` 字段，不跟随 API 预设切换。
+- 留空时不发送任务回调。
+- 配置后，生成/编辑任务完成时会向该 HTTPS URL 发送签名 webhook 回调。
+- 配置 Webhook URL 时需要设置 `WEBHOOK_SIGNING_SECRET`；保存后的 webhook URL 会在 API 响应和 UI 中打码。
 
 ## 图像尺寸模式
 
@@ -856,7 +872,7 @@ curl http://localhost:9090/health
 | `DATABASE_FILE` | `./data/app.sqlite3` | 保存 Gallery 元数据和 API 预设的 SQLite 数据库 |
 | `PYTHON_BASE_IMAGE` | `python:3.11-slim` | Docker 构建基础镜像；Docker Hub 慢或不可访问时可覆盖 |
 | `NODE_BASE_IMAGE` | `node:24-alpine` | Docker 前端构建基础镜像；Docker Hub 慢或不可访问时可覆盖 |
-| `WEBHOOK_SIGNING_SECRET` | 空 | 使用 `webhook_url` 时需要；用于签名 webhook payload（`X-Webhook-Signature`） |
+| `WEBHOOK_SIGNING_SECRET` | 空 | 配置全局 Webhook URL 时需要；用于签名 webhook payload（`X-Webhook-Signature`） |
 | `WEBHOOK_HOST_ALLOWLIST` | 空 | 可选 webhook 主机名白名单，逗号分隔 |
 | `WEBHOOK_TIMEOUT_SECONDS` | `5` | 单次 webhook 投递超时时间（秒） |
 | `WEBHOOK_MAX_ATTEMPTS` | `3` | webhook 最大重试次数 |

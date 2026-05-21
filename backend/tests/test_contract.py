@@ -798,6 +798,79 @@ def test_settings_global_socks5_proxy_save_mask_preserve_and_clear(client):
     assert storage.load_settings()["upstream_socks5_proxy"] == ""
 
 
+def test_settings_global_webhook_url_save_mask_preserve_clear_and_use(client, monkeypatch):
+    settings = client.get("/api/settings").json()
+    base_payload = {
+        "active_preset_id": settings["active_preset_id"],
+        "preset_name": "Webhook preset",
+        "api_url": "https://api.example.com",
+        "api_key": None,
+        "api_path": "/v1/images/generations",
+    }
+
+    updated = client.post(
+        "/api/settings",
+        json={
+            **base_payload,
+            "webhook_url": "https://hooks.example.com/services/top-secret?token=hidden",
+        },
+    )
+
+    assert updated.status_code == 200
+    updated_body = updated.json()
+    assert updated_body["has_webhook_url"] is True
+    assert updated_body["webhook_url_masked"] == "https://hooks.example.com/***?***"
+    assert "top-secret" not in json.dumps(updated_body)
+    assert "hidden" not in json.dumps(updated_body)
+    assert (
+        storage.load_settings()["webhook_url"]
+        == "https://hooks.example.com/services/top-secret?token=hidden"
+    )
+
+    preserved = client.post(
+        "/api/settings",
+        json={**base_payload, "webhook_url": updated_body["webhook_url_masked"]},
+    )
+    assert preserved.status_code == 200
+    assert (
+        storage.load_settings()["webhook_url"]
+        == "https://hooks.example.com/services/top-secret?token=hidden"
+    )
+
+    created = client.post("/api/settings/presets", json={"name": "Alt webhook preset"})
+    assert created.status_code == 200
+    assert created.json()["webhook_url_masked"] == updated_body["webhook_url_masked"]
+
+    reactivated = client.post(
+        f"/api/settings/presets/{settings['active_preset_id']}/activate"
+    )
+    assert reactivated.status_code == 200
+    assert reactivated.json()["webhook_url_masked"] == updated_body["webhook_url_masked"]
+
+    seen: dict[str, str | None] = {}
+
+    def fake_validate_job_webhook_url(webhook_url: str | None) -> str | None:
+        seen["webhook_url"] = webhook_url
+        return None
+
+    monkeypatch.setattr(jobs, "validate_job_webhook_url", fake_validate_job_webhook_url)
+    generated = client.post(
+        "/api/generate",
+        json={"prompt": "global webhook", "model": "gpt-image-2"},
+    )
+    assert generated.status_code == 202
+    assert seen["webhook_url"] == "https://hooks.example.com/services/top-secret?token=hidden"
+
+    cleared = client.post(
+        "/api/settings",
+        json={**base_payload, "webhook_url": ""},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["has_webhook_url"] is False
+    assert cleared.json()["webhook_url_masked"] == ""
+    assert storage.load_settings()["webhook_url"] == ""
+
+
 def _settings_payload(settings: dict, **overrides):
     payload = {
         "active_preset_id": settings["active_preset_id"],
@@ -982,6 +1055,25 @@ def test_settings_rejects_invalid_socks5_proxy(client):
 
     assert resp.status_code == 422
     assert "socks5://" in json.dumps(resp.json())
+
+
+def test_settings_rejects_invalid_global_webhook_url(client):
+    settings = client.get("/api/settings").json()
+
+    resp = client.post(
+        "/api/settings",
+        json={
+            "active_preset_id": settings["active_preset_id"],
+            "preset_name": "Bad webhook",
+            "api_url": "https://api.example.com",
+            "api_key": None,
+            "api_path": "/v1/images/generations",
+            "webhook_url": "http://hooks.example.com/callback",
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "https://" in json.dumps(resp.json())
 
 
 def test_socks5_proxy_only_flows_to_generation_and_edit(client, monkeypatch):

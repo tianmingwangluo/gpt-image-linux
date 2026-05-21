@@ -26,6 +26,8 @@ export type SettingsResponse = {
   default_model: string;
   has_upstream_socks5_proxy: boolean;
   upstream_socks5_proxy_masked: string;
+  has_webhook_url: boolean;
+  webhook_url_masked: string;
   presets: ApiPreset[];
   prompt_optimizer: PromptOptimizerSettings;
 };
@@ -55,6 +57,7 @@ export type SettingsInput = {
   api_path: ApiPath;
   default_model?: string | null;
   upstream_socks5_proxy?: string | null;
+  webhook_url?: string | null;
   prompt_optimizer?: PromptOptimizerSettingsInput | null;
 };
 
@@ -83,7 +86,6 @@ export type GenerateRequestBody = {
   output_format: 'png' | 'jpeg' | 'webp';
   output_compression?: number | null;
   response_format?: 'url' | 'b64_json' | null;
-  webhook_url?: string | null;
   api_path?: ApiPath | null;
 };
 

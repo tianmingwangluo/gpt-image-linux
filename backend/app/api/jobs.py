@@ -16,7 +16,13 @@ from .app_state import (
     MAX_GENERATE_JOBS,
     app,
 )
-from .presets import get_active_preset, get_effective_preset_api_key, get_exception_message, get_upstream_socks5_proxy
+from .presets import (
+    get_active_preset,
+    get_effective_preset_api_key,
+    get_exception_message,
+    get_upstream_socks5_proxy,
+    get_webhook_url,
+)
 from ..core import settings as config
 from ..core.api_paths import normalize_default_model
 from ..core.observability import JobStageTimer, metrics, use_job_stage_timer
@@ -472,7 +478,7 @@ def queue_image_job(
     api_key = get_effective_preset_api_key(active_preset)
     socks5_proxy = get_upstream_socks5_proxy()
 
-    webhook_url = validate_job_webhook_url(req.webhook_url)
+    webhook_url = validate_job_webhook_url(req.webhook_url or get_webhook_url())
     ensure_job_queue_capacity(pending_edit_source_bytes)
     job_id = str(uuid.uuid4())
     reserved_edit_source_bytes = 0

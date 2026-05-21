@@ -146,10 +146,6 @@
       </select>
     </label>
 
-    <label class="block">
-      <span class="mb-1.5 block text-xs font-medium text-zinc-400">{$t.promptForm.webhookUrl}</span>
-      <input bind:value={form.webhookUrl} class="control-focus w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-emerald-500" placeholder="https://..." />
-    </label>
   </div>
 
   <div class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

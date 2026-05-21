@@ -8,6 +8,7 @@ from ..app_state import app
 from ..presets import (
     apply_api_preset,
     apply_upstream_socks5_proxy,
+    apply_webhook_url,
     build_settings_response,
     get_active_preset,
     get_api_key_env_var,
@@ -15,8 +16,10 @@ from ..presets import (
     get_exception_message,
     get_preset_by_id,
     get_upstream_socks5_proxy,
+    get_webhook_url,
     is_malformed_api_key_env_ref,
     mask_socks5_proxy_url,
+    mask_webhook_url,
     persist_api_settings,
 )
 from ...core import settings as config
@@ -61,6 +64,13 @@ async def update_settings(req: SettingsRequest):
             app.state.upstream_socks5_proxy = current_proxy
         else:
             apply_upstream_socks5_proxy(requested_proxy)
+    if req.webhook_url is not None:
+        current_webhook_url = get_webhook_url()
+        requested_webhook_url = req.webhook_url.strip()
+        if current_webhook_url and requested_webhook_url == mask_webhook_url(current_webhook_url):
+            app.state.webhook_url = current_webhook_url
+        else:
+            apply_webhook_url(requested_webhook_url)
     apply_api_preset(preset)
     persist_api_settings()
     if req.prompt_optimizer is not None:
